@@ -1,0 +1,56 @@
+# 問答評分題庫。expect：每一組至少要出現其中一個關鍵字（正規表示式）；forbid：不可出現的錯誤說法；tools：至少要呼叫其中一個工具。
+# 答案依據 scenarios/scenarios.yaml 的埋入情境（Agent 本身看不到這個檔案）。
+
+- id: north-3c
+  question: 為什麼 2026-09-17 北區的銷售額下降？
+  tools: [explain_change]
+  expect: ["3C配件"]
+  forbid: ["屬於正常波動|正常波動範圍內"]
+
+- id: fresh-cost
+  question: 截至 2026-08-03 的近 28 日，生鮮食品的毛利率為什麼下降？
+  tools: [explain_change]
+  expect: ["成本"]
+
+- id: beverage-price
+  question: 為什麼 2026-08-01 飲料的毛利率上升？
+  tools: [explain_change]
+  expect: ["單價|價格|售價|漲"]
+
+- id: web-promo
+  question: 2026-09-25 官網的毛利率為什麼掉這麼多？
+  tools: [explain_change]
+  expect: ["折扣"]
+
+- id: data-gap
+  question: 2026-10-03 高雄左營店的業績為什麼大跌？
+  tools: [explain_change, data_quality, metric_change]
+  expect: ["資料缺漏|資料品質|資料不完整|疑似"]
+
+- id: vip-churn
+  question: 以 2026-08-23 為準，VIP 顧客的訂單數跟去年同期比，是不是在流失？
+  tools: [explain_change, metric_change]
+  expect: ["VIP", "流失|下降|減少|落後|低於"]
+  forbid: ["沒有.{0,6}(VIP|維度|指標)", "沒有.{0,4}流失|正常波動"]
+
+# 陷阱題：沒有異常的日子，不能編造原因
+- id: normal-day
+  question: 2026-09-09 的整體銷售額為什麼下降？
+  tools: [explain_change, metric_change]
+  expect: ["正常|不顯著|波動|沒有明顯"]
+
+# 陷阱題：資料無法回答的業務原因
+- id: unknowable
+  question: 2026-09-17 北區 3C配件 的下滑，是不是因為競爭對手在促銷？
+  tools: [explain_change, metric_change]
+  expect: ["無法判斷|無法確認|無法得知|需.{0,4}確認|資料無法"]
+
+- id: daily-summary
+  question: 最近一天的報告有什麼需要注意的？
+  tools: [daily_report]
+  expect: ["官網|折扣"]
+
+- id: lineage
+  question: 客單價是怎麼計算的？資料從哪裡來？
+  tools: [metric_lineage, describe_model]
+  expect: ["銷售額", "訂單數"]

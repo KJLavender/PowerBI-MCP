@@ -1,0 +1,258 @@
+/// 銷售明細（訂單明細層級，一列 = 一筆訂單中的一項商品）
+table FACT_SALES
+	lineageTag: ef5b9f99-5fed-5d6a-a338-5d831bc358e2
+
+	/// 折扣後淨銷售額
+	measure 銷售額 = SUM ( FACT_SALES[SALES_AMOUNT] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: e2b604ed-30d1-50cc-a3fe-39d75809301c
+
+	/// 銷貨成本
+	measure 成本 = SUM ( FACT_SALES[COST_AMOUNT] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: e16f33ed-abda-5ef6-80eb-5eb70abace4d
+
+	/// 銷售額 − 成本
+	measure 毛利 = [銷售額] - [成本]
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 8b3415bd-55bc-5784-93a4-9189cca36b5e
+
+	/// 毛利 ÷ 銷售額
+	measure 毛利率 = DIVIDE ( [毛利], [銷售額] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 基本指標
+		lineageTag: 03128f42-d3a0-58a7-a158-44621d02b460
+
+	/// 不重複訂單數（來客數）
+	measure 訂單數 = DISTINCTCOUNT ( FACT_SALES[ORDER_ID] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: bef72ac2-8c7a-53f2-a553-1af96d1be273
+
+	/// 商品銷售件數
+	measure 銷售數量 = SUM ( FACT_SALES[QUANTITY] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 1c580c50-5a48-5c0a-84f9-c87d9948bab3
+
+	/// 平均每筆訂單銷售額 = 銷售額 ÷ 訂單數
+	measure 客單價 = DIVIDE ( [銷售額], [訂單數] )
+		formatString: #,##0.0
+		displayFolder: 基本指標
+		lineageTag: d0f55401-d8d3-5f01-8f7f-2782ec568e37
+
+	/// 折扣前平均每件售價
+	measure 平均成交單價 = DIVIDE ( SUMX ( FACT_SALES, FACT_SALES[UNIT_PRICE] * FACT_SALES[QUANTITY] ), [銷售數量] )
+		formatString: #,##0.0
+		displayFolder: 基本指標
+		lineageTag: 33665b22-28a2-5b6e-adf4-f27e5bc28ef0
+
+	/// 折扣總額
+	measure 折扣金額 = SUM ( FACT_SALES[DISCOUNT_AMOUNT] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 8f55e948-045c-5008-8435-6dd84f36e8db
+
+	/// 折扣金額 ÷ 折扣前金額
+	measure 折扣率 = DIVIDE ( [折扣金額], [銷售額] + [折扣金額] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 基本指標
+		lineageTag: a1f51133-2c43-551b-8d8b-479033fd1888
+
+	/// 有消費的不重複會員數（不含非會員）
+	measure 購買會員數 = CALCULATE ( DISTINCTCOUNT ( FACT_SALES[CUSTOMER_ID] ), DIM_CUSTOMER[SEGMENT] <> "非會員" )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 2c574b8f-afbc-52ca-b0a7-ed7499d936f3
+
+	/// 前一天的銷售額
+	measure '銷售額 前一日' = CALCULATE ( [銷售額], DATEADD ( DIM_DATE[FULL_DATE], -1, DAY ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+		lineageTag: 4d04ac51-d162-57df-bfd7-d294ed2e6543
+
+	/// 7 天前的銷售額（同星期比較）
+	measure '銷售額 上週同日' = CALCULATE ( [銷售額], DATEADD ( DIM_DATE[FULL_DATE], -7, DAY ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+		lineageTag: b1a9a5f1-96a6-572c-b7f7-871369c93115
+
+	/// 與上週同日相比的變動率
+	measure '銷售額 週變動%' = DIVIDE ( [銷售額] - [銷售額 上週同日], [銷售額 上週同日] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 時間比較
+		lineageTag: 54ae1c64-7451-5a07-8610-0412520d0676
+
+	/// 去年同期銷售額
+	measure '銷售額 去年同期' = CALCULATE ( [銷售額], SAMEPERIODLASTYEAR ( DIM_DATE[FULL_DATE] ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+		lineageTag: 74a30e49-98f1-5259-abcc-bcdd1d7d5762
+
+	/// 年增率
+	measure '銷售額 YoY%' = DIVIDE ( [銷售額] - [銷售額 去年同期], [銷售額 去年同期] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 時間比較
+		lineageTag: e9573ae5-154c-58b9-9ad8-a08c3a4fb2c6
+
+	/// 本月累計銷售額
+	measure '銷售額 MTD' = TOTALMTD ( [銷售額], DIM_DATE[FULL_DATE] )
+		formatString: #,##0
+		displayFolder: 時間比較
+		lineageTag: 67ca4b9d-42c9-52bb-b209-b24554f5072a
+
+	/// 7 天前的毛利率
+	measure '毛利率 上週同日' = CALCULATE ( [毛利率], DATEADD ( DIM_DATE[FULL_DATE], -7, DAY ) )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 時間比較
+		lineageTag: 71ea8864-ccf9-5a79-b240-804f3b471288
+
+	/// 7 天前的訂單數
+	measure '訂單數 上週同日' = CALCULATE ( [訂單數], DATEADD ( DIM_DATE[FULL_DATE], -7, DAY ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+		lineageTag: 286e7dee-79ca-5ee1-86b6-cd41ea9aa417
+
+	/// 訂單編號
+	column ORDER_ID
+		dataType: int64
+		isHidden
+		lineageTag: b070f82c-1521-59ad-a153-3ffb8a49495e
+		summarizeBy: none
+		sourceColumn: ORDER_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column LINE_NO
+		dataType: int64
+		isHidden
+		lineageTag: a764bf45-25d6-5a4b-801f-e2f38531a9d3
+		summarizeBy: none
+		sourceColumn: LINE_NO
+
+		annotation SummarizationSetBy = Automatic
+
+	column DATE_KEY
+		dataType: int64
+		isHidden
+		lineageTag: ceb61670-48f3-55f2-9ee4-14490e560231
+		summarizeBy: none
+		sourceColumn: DATE_KEY
+
+		annotation SummarizationSetBy = Automatic
+
+	column STORE_ID
+		dataType: int64
+		isHidden
+		lineageTag: 7096eada-ab2e-501e-89b8-17d9e432b246
+		summarizeBy: none
+		sourceColumn: STORE_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column CHANNEL_ID
+		dataType: int64
+		isHidden
+		lineageTag: b71613e5-af52-53c4-845d-bd01c75234d2
+		summarizeBy: none
+		sourceColumn: CHANNEL_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column PRODUCT_ID
+		dataType: int64
+		isHidden
+		lineageTag: dd3bfcca-9616-50b4-b179-8afcfc722db9
+		summarizeBy: none
+		sourceColumn: PRODUCT_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column CUSTOMER_ID
+		dataType: int64
+		isHidden
+		lineageTag: d63b8d32-9b3a-510b-8b7b-255c7f01a31c
+		summarizeBy: none
+		sourceColumn: CUSTOMER_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 銷售數量
+	column QUANTITY
+		dataType: int64
+		formatString: #,##0
+		lineageTag: aa9e2c2a-c4b3-5848-bc8f-0702c583a312
+		summarizeBy: sum
+		sourceColumn: QUANTITY
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 成交單價（未扣折扣）
+	column UNIT_PRICE
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: a665fe96-6c92-5acf-9b43-898176366db1
+		summarizeBy: sum
+		sourceColumn: UNIT_PRICE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 整行折扣金額
+	column DISCOUNT_AMOUNT
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: 32914f76-7b33-560a-a213-21a50d01ec13
+		summarizeBy: sum
+		sourceColumn: DISCOUNT_AMOUNT
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 折扣後淨銷售額 = 數量 × 單價 − 折扣
+	column SALES_AMOUNT
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: 53846ea6-b286-55eb-bdd7-c9b5d321f856
+		summarizeBy: sum
+		sourceColumn: SALES_AMOUNT
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 銷貨成本
+	column COST_AMOUNT
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: 70b74433-cad5-59dc-9f84-0ef7fefd603a
+		summarizeBy: sum
+		sourceColumn: COST_AMOUNT
+
+		annotation SummarizationSetBy = Automatic
+
+	partition FACT_SALES = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "FACT_SALES"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"ORDER_ID", Int64.Type},
+				        {"LINE_NO", Int64.Type},
+				        {"DATE_KEY", Int64.Type},
+				        {"STORE_ID", Int64.Type},
+				        {"CHANNEL_ID", Int64.Type},
+				        {"PRODUCT_ID", Int64.Type},
+				        {"CUSTOMER_ID", Int64.Type},
+				        {"QUANTITY", Int64.Type},
+				        {"UNIT_PRICE", Currency.Type},
+				        {"DISCOUNT_AMOUNT", Currency.Type},
+				        {"SALES_AMOUNT", Currency.Type},
+				        {"COST_AMOUNT", Currency.Type}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

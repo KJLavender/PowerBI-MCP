@@ -1,0 +1,79 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.1.0/schema.json",
+  "name": "etlRows",
+  "position": {
+    "x": 20,
+    "y": 80,
+    "z": 200,
+    "width": 1240,
+    "height": 300,
+    "tabOrder": 200
+  },
+  "visual": {
+    "visualType": "lineChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_DATE"
+                    }
+                  },
+                  "Property": "FULL_DATE"
+                }
+              },
+              "queryRef": "DIM_DATE.FULL_DATE",
+              "nativeQueryRef": "FULL_DATE",
+              "active": true
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "ETL_BATCH_LOG"
+                    }
+                  },
+                  "Property": "ETL 載入筆數"
+                }
+              },
+              "queryRef": "ETL_BATCH_LOG.ETL 載入筆數",
+              "nativeQueryRef": "ETL 載入筆數"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'每日 ETL 載入筆數'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

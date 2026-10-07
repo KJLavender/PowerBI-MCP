@@ -1,0 +1,139 @@
+/// 日期維度（已標記為日期資料表）
+table DIM_DATE
+	lineageTag: d0a37295-e05d-556e-9033-19a6b742c9d2
+	dataCategory: Time
+
+	column DATE_KEY
+		dataType: int64
+		isHidden
+		lineageTag: eecef3dd-4708-5eab-ac97-afb5bc12216c
+		summarizeBy: none
+		sourceColumn: DATE_KEY
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 日期
+	column FULL_DATE
+		dataType: dateTime
+		isKey
+		formatString: yyyy-mm-dd
+		lineageTag: a6fd2f80-1f43-56e1-8d96-81998c09df22
+		summarizeBy: none
+		sourceColumn: FULL_DATE
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// 年
+	column YEAR_NUM
+		dataType: int64
+		formatString: 0
+		lineageTag: d52078f6-042f-5241-9f5e-b06825e2fb88
+		summarizeBy: none
+		sourceColumn: YEAR_NUM
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 季
+	column QUARTER_NUM
+		dataType: int64
+		formatString: 0
+		lineageTag: 98b83889-ca48-5b66-bbf4-dcdce3b7413b
+		summarizeBy: none
+		sourceColumn: QUARTER_NUM
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 月
+	column MONTH_NUM
+		dataType: int64
+		formatString: 0
+		lineageTag: 4ebd6f7b-3efa-5436-a9cc-e9797dc4c94f
+		summarizeBy: none
+		sourceColumn: MONTH_NUM
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 年月，例如 2026-10
+	column YEAR_MONTH
+		dataType: string
+		lineageTag: b7306598-b42e-5767-9761-0d20a13f1ce0
+		summarizeBy: none
+		sourceColumn: YEAR_MONTH
+
+		annotation SummarizationSetBy = Automatic
+
+	/// ISO 週次
+	column ISO_WEEK
+		dataType: int64
+		formatString: 0
+		lineageTag: fbfc5512-7298-5d36-8550-1db48f26dbcd
+		summarizeBy: none
+		sourceColumn: ISO_WEEK
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 星期幾（1=週一）
+	column DAY_OF_WEEK
+		dataType: int64
+		isHidden
+		lineageTag: c232f97d-383d-5b88-84aa-2e8b61c11d86
+		summarizeBy: none
+		sourceColumn: DAY_OF_WEEK
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 星期名稱
+	column WEEKDAY_NAME
+		dataType: string
+		lineageTag: 47d48bc0-4ccd-5de0-b08a-dae5da2dd8cd
+		summarizeBy: none
+		sourceColumn: WEEKDAY_NAME
+		sortByColumn: DAY_OF_WEEK
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 是否為週末 Y/N
+	column IS_WEEKEND
+		dataType: string
+		lineageTag: b343d93e-27cb-5404-ba12-a423bff67ae0
+		summarizeBy: none
+		sourceColumn: IS_WEEKEND
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 節日或促銷檔期名稱
+	column HOLIDAY_NAME
+		dataType: string
+		lineageTag: 67566cc9-a4a1-5a6a-a968-94dfff462313
+		summarizeBy: none
+		sourceColumn: HOLIDAY_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	partition DIM_DATE = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_DATE"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"DATE_KEY", Int64.Type},
+				        {"FULL_DATE", type date},
+				        {"YEAR_NUM", Int64.Type},
+				        {"QUARTER_NUM", Int64.Type},
+				        {"MONTH_NUM", Int64.Type},
+				        {"YEAR_MONTH", type text},
+				        {"ISO_WEEK", Int64.Type},
+				        {"DAY_OF_WEEK", Int64.Type},
+				        {"WEEKDAY_NAME", type text},
+				        {"IS_WEEKEND", type text},
+				        {"HOLIDAY_NAME", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

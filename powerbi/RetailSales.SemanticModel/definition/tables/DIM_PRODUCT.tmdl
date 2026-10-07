@@ -1,0 +1,90 @@
+/// 商品
+table DIM_PRODUCT
+	lineageTag: 021abbcc-c105-576e-8996-d262a182a4fb
+
+	column PRODUCT_ID
+		dataType: int64
+		isHidden
+		lineageTag: c9cb10e6-5577-5bf7-bf63-d3cba4b926d1
+		summarizeBy: none
+		sourceColumn: PRODUCT_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 商品代碼
+	column PRODUCT_CODE
+		dataType: string
+		lineageTag: 78eb2507-1c9f-5161-9860-1485408de050
+		summarizeBy: none
+		sourceColumn: PRODUCT_CODE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 商品名稱
+	column PRODUCT_NAME
+		dataType: string
+		lineageTag: bb1ab2be-839e-507d-af6c-bab68671c111
+		summarizeBy: none
+		sourceColumn: PRODUCT_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 商品大類
+	column CATEGORY
+		dataType: string
+		lineageTag: f3aa3d16-299c-57ab-95f0-43981be1b7fe
+		summarizeBy: none
+		sourceColumn: CATEGORY
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 品牌
+	column BRAND
+		dataType: string
+		lineageTag: 2ed19e50-9c95-5532-948f-3bed590ec26a
+		summarizeBy: none
+		sourceColumn: BRAND
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 牌價
+	column LIST_PRICE
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: caedc97a-e7bb-5970-9fb1-47e5e29d8494
+		summarizeBy: none
+		sourceColumn: LIST_PRICE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 標準成本（主檔，實際成本以 FACT_SALES.COST_AMOUNT 為準）
+	column STD_COST
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: c16c0d3e-823d-5dca-9f7c-0f5863b23f71
+		summarizeBy: none
+		sourceColumn: STD_COST
+
+		annotation SummarizationSetBy = Automatic
+
+	partition DIM_PRODUCT = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_PRODUCT"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"PRODUCT_ID", Int64.Type},
+				        {"PRODUCT_CODE", type text},
+				        {"PRODUCT_NAME", type text},
+				        {"CATEGORY", type text},
+				        {"BRAND", type text},
+				        {"LIST_PRICE", Currency.Type},
+				        {"STD_COST", Currency.Type}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

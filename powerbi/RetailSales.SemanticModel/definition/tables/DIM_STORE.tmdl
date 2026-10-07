@@ -1,0 +1,112 @@
+/// 門市。線上訂單依顧客所在區域歸屬到門市
+table DIM_STORE
+	lineageTag: 96e64b97-7490-5d72-b5dd-9cd345a64cda
+
+	column STORE_ID
+		dataType: int64
+		isHidden
+		lineageTag: a982d076-5058-5da2-9ba8-2f88ba73172b
+		summarizeBy: none
+		sourceColumn: STORE_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 門市代碼
+	column STORE_CODE
+		dataType: string
+		lineageTag: 9fbec1f8-9021-588b-89d8-fbc3bc9b4f6a
+		summarizeBy: none
+		sourceColumn: STORE_CODE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 門市名稱
+	column STORE_NAME
+		dataType: string
+		lineageTag: 64dae344-2d52-51a3-863e-41281aed4a60
+		summarizeBy: none
+		sourceColumn: STORE_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 縣市
+	column CITY
+		dataType: string
+		lineageTag: 0f3cb380-8c2f-5877-afe8-a4a8ef67ed88
+		summarizeBy: none
+		sourceColumn: CITY
+
+		annotation SummarizationSetBy = Automatic
+
+	column REGION_CODE
+		dataType: string
+		isHidden
+		lineageTag: 9d89f8f6-6184-5b89-9570-51183b4ec6ad
+		summarizeBy: none
+		sourceColumn: REGION_CODE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 區域：北區 / 中區 / 南區 / 東區
+	column REGION_NAME
+		dataType: string
+		lineageTag: 5460c483-4649-54f4-b85c-9340921e6327
+		summarizeBy: none
+		sourceColumn: REGION_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 店型：旗艦店 / 標準店 / 社區店
+	column STORE_TYPE
+		dataType: string
+		lineageTag: ae2f7493-8733-55d4-ad79-491d765bad95
+		summarizeBy: none
+		sourceColumn: STORE_TYPE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 賣場坪數
+	column FLOOR_AREA_PING
+		dataType: int64
+		formatString: #,##0
+		lineageTag: d18211a7-f23b-57a3-88d4-779d9be7ddfe
+		summarizeBy: none
+		sourceColumn: FLOOR_AREA_PING
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 開幕日
+	column OPEN_DATE
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 9bb51a18-155e-5f1e-aa8b-570e2463e315
+		summarizeBy: none
+		sourceColumn: OPEN_DATE
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	partition DIM_STORE = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_STORE"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"STORE_ID", Int64.Type},
+				        {"STORE_CODE", type text},
+				        {"STORE_NAME", type text},
+				        {"CITY", type text},
+				        {"REGION_CODE", type text},
+				        {"REGION_NAME", type text},
+				        {"STORE_TYPE", type text},
+				        {"FLOOR_AREA_PING", Int64.Type},
+				        {"OPEN_DATE", type date}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

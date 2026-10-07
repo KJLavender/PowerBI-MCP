@@ -1,0 +1,74 @@
+# 情境注入（Ground Truth）
+# 這些事件會被寫進模擬資料，但「情境本身」不會進 Oracle。
+# 之後的分析 / Agent 層「不可以」讀這個資料夾，只能從資料中找出原因，再拿這裡的答案評分。
+#
+# filter（可多選，皆為 AND；值可為單一字串或清單）：
+#   region   北區 / 中區 / 南區 / 東區
+#   store    門市代碼，例如 S001
+#   channel  門市 / 官網 / 電商平台
+#   segment  非會員 / 一般會員 / VIP
+#   category 飲料 / 零食 / 生鮮食品 / 日用品 / 美妝保養 / 3C配件
+#   product  商品代碼，例如 P0041
+#   * 沒有 category / product 時，效果作用在「整筆訂單」（來客數變化）
+#   * 有 category / product 時，效果作用在「訂單明細」（商品銷量變化）
+#
+# effects：
+#   volume          銷量 / 來客倍率（0.7 = 減少 30%）
+#   price           成交單價倍率
+#   cost            單位成本倍率
+#   extra_discount  額外折扣率（0.1 = 多打 10%）
+#   missing_rate    資料遺失比例（模擬 ETL 漏資料）
+#
+# start / end：生效期間（end 省略表示持續）；ramp_days：幾天內逐步達到完整效果
+# 修改後需重跑受影響期間：python -m simulator backfill --start <日期> --end <日期>
+
+scenarios:
+  - id: north-3c-drop
+    description: 北區 3C配件 銷量下滑 35%（例：競品在北區大舉促銷）
+    start: 2026-09-15
+    ramp_days: 3
+    filter: {region: 北區, category: 3C配件}
+    effects: {volume: 0.65}
+
+  - id: beverage-price-up
+    description: 飲料全面漲價 8%，銷量因此減少 10%
+    start: 2026-08-01
+    filter: {category: 飲料}
+    effects: {price: 1.08, volume: 0.90}
+
+  - id: fresh-cost-up
+    description: 生鮮食品進貨成本上漲 12%，售價未調整，毛利率下降
+    start: 2026-07-01
+    ramp_days: 14
+    filter: {category: 生鮮食品}
+    effects: {cost: 1.12}
+
+  - id: web-promo
+    description: 官網週年慶活動，額外折扣 10%，來客增加 30%
+    start: 2026-09-25
+    end: 2026-10-08
+    filter: {channel: 官網}
+    effects: {extra_discount: 0.10, volume: 1.30}
+
+  - id: s018-missing-data
+    description: 高雄左營店 10/3 資料只進來 30%，但 ETL 紀錄仍顯示 SUCCESS（無聲的資料缺漏）
+    start: 2026-10-03
+    end: 2026-10-03
+    filter: {store: S018}
+    effects: {missing_rate: 0.70}
+
+  - id: vip-slow-churn
+    description: VIP 顧客消費緩慢流失，60 天內來客降到 85%（不易察覺的慢性變化）
+    start: 2026-06-01
+    ramp_days: 60
+    filter: {segment: VIP}
+    effects: {volume: 0.85}
+
+  # 範本：把 enabled 改成 true 即可啟用
+  - id: template-example
+    enabled: false
+    description: 範例：東區門市通路因颱風休業一天
+    start: 2026-10-20
+    end: 2026-10-20
+    filter: {region: 東區, channel: 門市}
+    effects: {volume: 0.1}

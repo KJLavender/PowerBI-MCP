@@ -1,0 +1,121 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.13.0/schema.json",
+  "name": "etlTable",
+  "position": {
+    "x": 20,
+    "y": 400,
+    "z": 300,
+    "height": 310,
+    "width": 1240,
+    "tabOrder": 300
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_DATE"
+                    }
+                  },
+                  "Property": "FULL_DATE"
+                }
+              },
+              "queryRef": "DIM_DATE.FULL_DATE",
+              "nativeQueryRef": "FULL_DATE",
+              "active": true
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "ETL_BATCH_LOG"
+                    }
+                  },
+                  "Property": "STATUS"
+                }
+              },
+              "queryRef": "ETL_BATCH_LOG.STATUS",
+              "nativeQueryRef": "STATUS",
+              "active": true
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "ETL_BATCH_LOG"
+                    }
+                  },
+                  "Property": "RUN_AT"
+                }
+              },
+              "queryRef": "ETL_BATCH_LOG.RUN_AT",
+              "nativeQueryRef": "RUN_AT",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "ETL_BATCH_LOG"
+                    }
+                  },
+                  "Property": "ETL 載入筆數"
+                }
+              },
+              "queryRef": "ETL_BATCH_LOG.ETL 載入筆數",
+              "nativeQueryRef": "ETL 載入筆數",
+              "active": false
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "ETL_BATCH_LOG"
+                    }
+                  },
+                  "Property": "實際明細筆數"
+                }
+              },
+              "queryRef": "ETL_BATCH_LOG.實際明細筆數",
+              "nativeQueryRef": "實際明細筆數",
+              "active": false
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'ETL 批次明細'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

@@ -1,0 +1,22 @@
+model Model
+	culture: zh-TW
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: zh-TW
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ["OracleServer", "OracleSchema", "FACT_SALES", "DIM_DATE", "DIM_STORE", "DIM_CHANNEL", "DIM_PRODUCT", "DIM_CUSTOMER", "ETL_BATCH_LOG"]
+
+annotation __PBI_TimeIntelligenceEnabled = 0
+
+annotation PBI_ProTooling = ["DevMode"]
+
+ref table FACT_SALES
+ref table DIM_DATE
+ref table DIM_STORE
+ref table DIM_CHANNEL
+ref table DIM_PRODUCT
+ref table DIM_CUSTOMER
+ref table ETL_BATCH_LOG
+

@@ -1,0 +1,24 @@
+relationship 4ffdafa9-a37d-5cd0-b9f9-29d6e995a1ac
+	fromColumn: FACT_SALES.DATE_KEY
+	toColumn: DIM_DATE.DATE_KEY
+
+relationship 1a9209d9-62ec-59f6-89b0-4f8f8f946370
+	fromColumn: FACT_SALES.STORE_ID
+	toColumn: DIM_STORE.STORE_ID
+
+relationship da96d6a4-5c77-5344-8e22-4e0063560015
+	fromColumn: FACT_SALES.CHANNEL_ID
+	toColumn: DIM_CHANNEL.CHANNEL_ID
+
+relationship 9000d4e7-3423-503f-9c4c-8545beae9072
+	fromColumn: FACT_SALES.PRODUCT_ID
+	toColumn: DIM_PRODUCT.PRODUCT_ID
+
+relationship ae00369c-6fda-5dfc-aaf5-c3fd628f4e72
+	fromColumn: FACT_SALES.CUSTOMER_ID
+	toColumn: DIM_CUSTOMER.CUSTOMER_ID
+
+relationship c0a1eb7a-ce2f-5eef-b568-31d4e576a6d8
+	fromColumn: ETL_BATCH_LOG.BUSINESS_DATE_KEY
+	toColumn: DIM_DATE.DATE_KEY
+

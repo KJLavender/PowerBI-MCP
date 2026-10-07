@@ -1,0 +1,12 @@
+/// Oracle 連線字串（host:port/service）
+expression OracleServer = "127.0.0.1:1521/FREEPDB1" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: ede7c5a2-57b9-5c24-b0d6-8a3598d67345
+
+	annotation PBI_ResultType = Text
+
+/// Oracle schema 名稱
+expression OracleSchema = "SALES_DW" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 6e8abec1-d0f5-5624-b3f6-7dc0077e57b8
+
+	annotation PBI_ResultType = Text
+

@@ -1,0 +1,91 @@
+/// 顧客。每個區域有一筆「非會員」虛擬顧客，代表未登入會員的門市消費
+table DIM_CUSTOMER
+	lineageTag: 6ea9e288-11c9-5dab-aaec-5df875cab4bf
+
+	column CUSTOMER_ID
+		dataType: int64
+		isHidden
+		lineageTag: e46d475b-eb1a-54bf-a758-45a37ab7b9b1
+		summarizeBy: none
+		sourceColumn: CUSTOMER_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 顧客代碼
+	column CUSTOMER_CODE
+		dataType: string
+		lineageTag: a2c32f46-0dd0-5a40-a0ee-b4ec35a70ef0
+		summarizeBy: none
+		sourceColumn: CUSTOMER_CODE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 顧客分群：非會員 / 一般會員 / VIP
+	column SEGMENT
+		dataType: string
+		lineageTag: 06a06b26-7f87-5924-9da9-a846dae1b980
+		summarizeBy: none
+		sourceColumn: SEGMENT
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 性別
+	column GENDER
+		dataType: string
+		lineageTag: 10f4ed00-237d-55b4-9558-b2ac9fa8a104
+		summarizeBy: none
+		sourceColumn: GENDER
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 年齡層
+	column AGE_GROUP
+		dataType: string
+		lineageTag: 38df2215-fc91-59ae-aa30-2aff22871eeb
+		summarizeBy: none
+		sourceColumn: AGE_GROUP
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 會員居住區域
+	column HOME_REGION_NAME
+		dataType: string
+		lineageTag: 4525f8cc-db36-5d80-a44e-47601b9772ad
+		summarizeBy: none
+		sourceColumn: HOME_REGION_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 入會日
+	column JOIN_DATE
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: a4edf423-4f45-58d1-93b3-7b46dd76f6df
+		summarizeBy: none
+		sourceColumn: JOIN_DATE
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	partition DIM_CUSTOMER = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_CUSTOMER"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"CUSTOMER_ID", Int64.Type},
+				        {"CUSTOMER_CODE", type text},
+				        {"SEGMENT", type text},
+				        {"GENDER", type text},
+				        {"AGE_GROUP", type text},
+				        {"HOME_REGION_NAME", type text},
+				        {"JOIN_DATE", type date}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

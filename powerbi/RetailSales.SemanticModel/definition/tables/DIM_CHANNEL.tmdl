@@ -1,0 +1,58 @@
+/// 銷售通路
+table DIM_CHANNEL
+	lineageTag: 5f07c2e4-44a3-5517-971c-3d562034e78a
+
+	column CHANNEL_ID
+		dataType: int64
+		isHidden
+		lineageTag: a39d8c02-2699-5375-869d-a38d972e4f14
+		summarizeBy: none
+		sourceColumn: CHANNEL_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column CHANNEL_CODE
+		dataType: string
+		isHidden
+		lineageTag: 7916e939-8b44-513a-b972-660cf11ffcba
+		summarizeBy: none
+		sourceColumn: CHANNEL_CODE
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 通路：門市 / 官網 / 電商平台
+	column CHANNEL_NAME
+		dataType: string
+		lineageTag: 58f8b6cf-d640-5711-98c0-bfb903f4bfc5
+		summarizeBy: none
+		sourceColumn: CHANNEL_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 實體 / 線上
+	column CHANNEL_TYPE
+		dataType: string
+		lineageTag: 8539bc8c-4ea3-5268-9e94-baba9b00197b
+		summarizeBy: none
+		sourceColumn: CHANNEL_TYPE
+
+		annotation SummarizationSetBy = Automatic
+
+	partition DIM_CHANNEL = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_CHANNEL"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"CHANNEL_ID", Int64.Type},
+				        {"CHANNEL_CODE", type text},
+				        {"CHANNEL_NAME", type text},
+				        {"CHANNEL_TYPE", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

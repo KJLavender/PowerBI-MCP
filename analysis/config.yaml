@@ -1,0 +1,50 @@
+# 分析設定：業務知識（要看哪些維度、怎麼往下鑽）與門檻。
+# 欄位必須存在於 Power BI 模型，且能從 fact 沿著「多對一」關聯走到（啟動時會驗證）。
+
+fact: FACT_SALES
+date: DIM_DATE.FULL_DATE
+holiday: DIM_DATE.HOLIDAY_NAME     # 用來標註節日造成的變化
+
+dimensions:                         # key 用於程式內部；label 用於報告
+  region:   {label: 區域,     column: DIM_STORE.REGION_NAME}
+  store:    {label: 門市,     column: DIM_STORE.STORE_NAME,     parent: region}
+  channel:  {label: 通路,     column: DIM_CHANNEL.CHANNEL_NAME}
+  category: {label: 品類,     column: DIM_PRODUCT.CATEGORY}
+  product:  {label: 商品,     column: DIM_PRODUCT.PRODUCT_NAME, parent: category}
+  segment:  {label: 顧客分群, column: DIM_CUSTOMER.SEGMENT}
+
+# 資料品質：ETL 批次紀錄（與 fact 實際筆數比對）、以哪個維度檢查「某單位資料突然變少」
+data_quality:
+  etl_table: ETL_BATCH_LOG
+  etl_date_key: BUSINESS_DATE_KEY
+  etl_rows: ROWS_LOADED
+  etl_status: STATUS
+  unit: store
+
+# 交叉組合掃描：找出像「北區 × 3C配件」這種只有在組合裡才明顯的變化
+combinations:
+  - [region, category]
+  - [region, channel]
+  - [channel, category]
+  - [segment, channel]
+  - [segment, category]
+
+# 量值之外的比較基準
+windows:
+  day:   {days: 1,  label: 單日}
+  week:  {days: 7,  label: 近 7 日}
+  month: {days: 28, label: 近 28 日}
+  # 慢性變化：與去年同期相比，並扣除整體的成長（成員相對整體的消長），抓「每週只掉一點」的流失
+  # like_for_like：整體基準只計算兩期都有營業的門市（同店比較），新店不會讓舊門市看起來衰退
+  year:  {days: 28, label: 近 28 日 vs 去年同期, mode: yoy, like_for_like: store}
+
+thresholds:
+  history_days: 182          # 用來估計「正常波動」的歷史長度
+  z_alert: 3.0               # 整體指標：變化量超過歷史波動幾個標準差才算顯著
+  z_alert_member: 4.0        # 維度成員：檢定次數多（數百個成員 × 指標 × 時間窗），門檻較高以控制誤報
+  min_change_pct: 0.05       # 且變動幅度至少 5%（避免大量體的小波動）
+  min_share: 0.01            # 成員佔整體比重太小（<1%）不單獨報告
+  min_ratio_change: 0.01     # 比率指標（毛利率、折扣率）至少變動 1 個百分點
+  dq_store_ratio: 0.5        # 門市當日訂單數低於同星期中位數的 50% → 資料品質警示
+  max_findings: 8
+  repeat_days: 14            # 同一變化在幾天內已報告過 → 列為「持續中」而非新發現

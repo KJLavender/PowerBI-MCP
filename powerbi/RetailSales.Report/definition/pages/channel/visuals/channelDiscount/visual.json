@@ -1,0 +1,98 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.1.0/schema.json",
+  "name": "channelDiscount",
+  "position": {
+    "x": 20,
+    "y": 380,
+    "z": 300,
+    "width": 600,
+    "height": 330,
+    "tabOrder": 300
+  },
+  "visual": {
+    "visualType": "lineChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_DATE"
+                    }
+                  },
+                  "Property": "FULL_DATE"
+                }
+              },
+              "queryRef": "DIM_DATE.FULL_DATE",
+              "nativeQueryRef": "FULL_DATE",
+              "active": true
+            }
+          ]
+        },
+        "Series": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_CHANNEL"
+                    }
+                  },
+                  "Property": "CHANNEL_NAME"
+                }
+              },
+              "queryRef": "DIM_CHANNEL.CHANNEL_NAME",
+              "nativeQueryRef": "CHANNEL_NAME",
+              "active": true
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "折扣率"
+                }
+              },
+              "queryRef": "FACT_SALES.折扣率",
+              "nativeQueryRef": "折扣率"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'各通路每日折扣率'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

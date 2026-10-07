@@ -1,0 +1,93 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.1.0/schema.json",
+  "name": "storeTypeSales",
+  "position": {
+    "x": 800,
+    "y": 400,
+    "z": 400,
+    "width": 460,
+    "height": 310,
+    "tabOrder": 400
+  },
+  "visual": {
+    "visualType": "barChart",
+    "query": {
+      "queryState": {
+        "Category": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_STORE"
+                    }
+                  },
+                  "Property": "STORE_TYPE"
+                }
+              },
+              "queryRef": "DIM_STORE.STORE_TYPE",
+              "nativeQueryRef": "STORE_TYPE",
+              "active": true
+            }
+          ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "銷售額"
+                }
+              },
+              "queryRef": "FACT_SALES.銷售額",
+              "nativeQueryRef": "銷售額"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "客單價"
+                }
+              },
+              "queryRef": "FACT_SALES.客單價",
+              "nativeQueryRef": "客單價"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'店型比較'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

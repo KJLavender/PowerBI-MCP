@@ -1,0 +1,43 @@
+# Oracle Database Free — simulates the company's Oracle source system.
+# Run from WSL:  docker compose --env-file ../.env up -d
+name: pbi-sim
+
+services:
+  oracle:
+    image: gvenzl/oracle-free:23-slim
+    container_name: pbi-oracle
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1521:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_ADMIN_PASSWORD}
+      APP_USER: ${ORACLE_USER}
+      APP_USER_PASSWORD: ${ORACLE_PASSWORD}
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+
+  # SQL Server Developer (free, non-production) with SQL Server Agent:
+  # hosts the Power BI Report Server catalog; Agent drives scheduled refresh.
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: pbi-mssql
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:1433:1433"
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_AGENT_ENABLED: "true"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+    volumes:
+      - mssql-data:/var/opt/mssql
+
+volumes:
+  oracle-data:
+  mssql-data:

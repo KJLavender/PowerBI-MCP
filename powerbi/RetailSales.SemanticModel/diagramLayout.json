@@ -1,0 +1,113 @@
+{
+  "version": "1.1.0",
+  "diagrams": [
+    {
+      "ordinal": 0,
+      "scrollPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "nodes": [
+        {
+          "location": {
+            "x": 219.53503364102789,
+            "y": 604.31066450520507
+          },
+          "nodeIndex": "DIM_CHANNEL",
+          "nodeLineageTag": "5f07c2e4-44a3-5517-971c-3d562034e78a",
+          "size": {
+            "height": 176,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 250.36092396729961,
+            "y": -50
+          },
+          "nodeIndex": "DIM_CUSTOMER",
+          "nodeLineageTag": "6ea9e288-11c9-5dab-aaec-5df875cab4bf",
+          "size": {
+            "height": 248,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 707.82852845930734,
+            "y": 434.51838525830215
+          },
+          "nodeIndex": "DIM_DATE",
+          "nodeLineageTag": "d0a37295-e05d-556e-9033-19a6b742c9d2",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 695.24494829872617,
+            "y": -49.962990379186067
+          },
+          "nodeIndex": "DIM_PRODUCT",
+          "nodeLineageTag": "021abbcc-c105-576e-8996-d262a182a4fb",
+          "size": {
+            "height": 248,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 50,
+            "y": 251.43219843276142
+          },
+          "nodeIndex": "DIM_STORE",
+          "nodeLineageTag": "96e64b97-7490-5d72-b5dd-9cd345a64cda",
+          "size": {
+            "height": 296,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 994.85151969163269,
+            "y": 703.58489898951825
+          },
+          "nodeIndex": "ETL_BATCH_LOG",
+          "nodeLineageTag": "46ee7abe-56ca-55d0-83d4-3a3597e54107",
+          "size": {
+            "height": 248,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 420.75201622690878,
+            "y": 251.46848146724574
+          },
+          "nodeIndex": "FACT_SALES",
+          "nodeLineageTag": "ef5b9f99-5fed-5d6a-a338-5d831bc358e2",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 0
+        }
+      ],
+      "name": "所有資料表",
+      "zoomValue": 100,
+      "pinKeyFieldsToTop": false,
+      "showExtraHeaderInfo": false,
+      "hideKeyFieldsWhenCollapsed": false,
+      "tablesLocked": false
+    }
+  ],
+  "selectedDiagram": "所有資料表",
+  "defaultDiagram": "所有資料表"
+}

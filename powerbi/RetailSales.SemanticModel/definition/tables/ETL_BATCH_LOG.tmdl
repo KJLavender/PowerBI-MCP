@@ -1,0 +1,82 @@
+/// ETL 每日批次紀錄：每個營業日載入的筆數與狀態
+table ETL_BATCH_LOG
+	lineageTag: 46ee7abe-56ca-55d0-83d4-3a3597e54107
+
+	/// ETL 批次回報的載入筆數
+	measure 'ETL 載入筆數' = SUM ( ETL_BATCH_LOG[ROWS_LOADED] )
+		formatString: #,##0
+		displayFolder: 資料品質
+		lineageTag: 7f52524e-5d8f-5128-9cc7-1ffa2447b05e
+
+	/// FACT_SALES 實際列數，可與 ETL 載入筆數比對
+	measure 實際明細筆數 = COUNTROWS ( FACT_SALES )
+		formatString: #,##0
+		displayFolder: 資料品質
+		lineageTag: 8c78562a-fa4a-5e3d-8c1e-6ce96329fcc4
+
+	column BUSINESS_DATE_KEY
+		dataType: int64
+		isHidden
+		lineageTag: 9f995c6f-a397-5457-bf16-1cd51d982e20
+		summarizeBy: none
+		sourceColumn: BUSINESS_DATE_KEY
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 批次執行時間
+	column RUN_AT
+		dataType: dateTime
+		formatString: yyyy-mm-dd hh:nn
+		lineageTag: c1623743-8d90-57a5-80b9-3d18f22e816c
+		summarizeBy: none
+		sourceColumn: RUN_AT
+
+		annotation SummarizationSetBy = Automatic
+
+	/// ETL 回報的載入筆數
+	column ROWS_LOADED
+		dataType: int64
+		formatString: #,##0
+		lineageTag: 575a5903-a38d-5293-a198-2472463ad4b1
+		summarizeBy: sum
+		sourceColumn: ROWS_LOADED
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 批次狀態
+	column STATUS
+		dataType: string
+		lineageTag: 4b5d057a-755b-5aa3-ac03-cd0ee1ba0541
+		summarizeBy: none
+		sourceColumn: STATUS
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 批次訊息
+	column MESSAGE
+		dataType: string
+		lineageTag: 450e9cba-0445-51a1-ab22-bc9bc4a58d06
+		summarizeBy: none
+		sourceColumn: MESSAGE
+
+		annotation SummarizationSetBy = Automatic
+
+	partition ETL_BATCH_LOG = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "ETL_BATCH_LOG"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"BUSINESS_DATE_KEY", Int64.Type},
+				        {"RUN_AT", type datetime},
+				        {"ROWS_LOADED", Int64.Type},
+				        {"STATUS", type text},
+				        {"MESSAGE", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table
+

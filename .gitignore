@@ -1,0 +1,14 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+logs/
+data/
+# third-party installers and downloaded modules (see docs/report-server.md for where to get them)
+installers/
+# Power BI local cache / user settings
+**/.pbi/localSettings.json
+**/.pbi/cache.abf
+# intermediate file from Power BI Desktop for Report Server (RetailSales.pbix is the published test file)
+powerbi/RetailSales_RS.pbix
+powerbi/*.tmp

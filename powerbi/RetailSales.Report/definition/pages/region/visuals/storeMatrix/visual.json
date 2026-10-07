@@ -1,0 +1,150 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.1.0/schema.json",
+  "name": "storeMatrix",
+  "position": {
+    "x": 20,
+    "y": 80,
+    "z": 200,
+    "width": 760,
+    "height": 630,
+    "tabOrder": 200
+  },
+  "visual": {
+    "visualType": "pivotTable",
+    "query": {
+      "queryState": {
+        "Rows": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_STORE"
+                    }
+                  },
+                  "Property": "REGION_NAME"
+                }
+              },
+              "queryRef": "DIM_STORE.REGION_NAME",
+              "nativeQueryRef": "REGION_NAME",
+              "active": true
+            },
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "DIM_STORE"
+                    }
+                  },
+                  "Property": "STORE_NAME"
+                }
+              },
+              "queryRef": "DIM_STORE.STORE_NAME",
+              "nativeQueryRef": "STORE_NAME",
+              "active": true
+            }
+          ]
+        },
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "銷售額"
+                }
+              },
+              "queryRef": "FACT_SALES.銷售額",
+              "nativeQueryRef": "銷售額"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "銷售額 週變動%"
+                }
+              },
+              "queryRef": "FACT_SALES.銷售額 週變動%",
+              "nativeQueryRef": "銷售額 週變動%"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "訂單數"
+                }
+              },
+              "queryRef": "FACT_SALES.訂單數",
+              "nativeQueryRef": "訂單數"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "客單價"
+                }
+              },
+              "queryRef": "FACT_SALES.客單價",
+              "nativeQueryRef": "客單價"
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "FACT_SALES"
+                    }
+                  },
+                  "Property": "毛利率"
+                }
+              },
+              "queryRef": "FACT_SALES.毛利率",
+              "nativeQueryRef": "毛利率"
+            }
+          ]
+        }
+      }
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'門市績效'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "powerbi-analysis": {
+      "command": "C:\\path\\to\\PowerBI MCP\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "analysis.mcp_server"],
+      "cwd": "C:\\path\\to\\PowerBI MCP",
+      "env": { "PYTHONIOENCODING": "utf-8" }
+    }
+  }
+}

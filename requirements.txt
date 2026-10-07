@@ -1,0 +1,6 @@
+oracledb>=2.5
+PyYAML>=6.0
+duckdb>=1.1
+pandas>=2.2
+mcp>=2.0
+ollama>=0.6

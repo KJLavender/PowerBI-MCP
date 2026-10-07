@@ -12,7 +12,7 @@
 |---|---|
 | 1. 模擬企業資料來源 | Oracle 資料庫（WSL 內的 Docker）由 ETL 模擬器每日更新；Power BI 專案以程式產生（TMDL + PBIR） |
 | 2. 每日變動分析 | 從 Power BI 專案讀取量值與關聯，快照到 DuckDB，偵測顯著變化，並找出能解釋變化的範圍。**6 個埋入情境全數偵測**（其中 4 個當天抓到） |
-| 3. 「為什麼」問答 | 本機網頁聊天室（可追問、即時顯示查詢進度、可查看證據），背後是唯讀 MCP Server + 本機 Ollama 模型。回答中的每個數字都必須出現在工具結果中；「顯著」之類的判斷，必須有實際做過顯著性判斷的工具作為依據。**10 題問答測試全數通過**，含陷阱題 |
+| 3. 「為什麼」問答 | 報表旁邊的問答面板（可追問、即時顯示查詢進度、可查看證據），背後是唯讀 MCP Server + 本機 Ollama 模型。回答中的每個數字都必須出現在工具結果中；「顯著」之類的判斷，必須有實際做過顯著性判斷的工具作為依據。**11 題問答測試全數通過**，含陷阱題 |
 | 4. Report Server | Power BI Report Server 每天 06:30 從 Oracle 排程更新，即典型的地端架構 |
 
 範例（`python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`）：
@@ -60,7 +60,7 @@ python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m analysis evaluate             # 用埋入的情境評分
 
 # Phase 3 — 用本機模型問為什麼
-.\scripts\start-chat.ps1                                # 網頁聊天室 http://127.0.0.1:8090（或雙擊 報表問答助理.cmd）
+.\scripts\start-chat.ps1                                # 報表 + 問答面板 http://localhost:8090（或雙擊 報表問答助理.cmd）
 .\.venv\Scripts\python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？" -v
 .\.venv\Scripts\python -m agent chat
 .\.venv\Scripts\python -m agent evaluate

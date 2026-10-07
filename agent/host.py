@@ -34,6 +34,8 @@ SYSTEM = """\
 1. 回答中的每一個數字、百分比、日期都必須「原文照抄」工具結果中的文字（含正負號、%、「個百分點」）。
    不可以自己計算、加總、換算、估計或四捨五入。工具沒有給的數字就不要寫。
 2. 問「為什麼」時，一定先呼叫 explain_change（metric、filters、date、window）。
+   - date 一律寫成 YYYY-MM-DD；問「整個月」（例如 2026/6、6 月）寫成 YYYY-MM（例如 "2026-06"），工具會用該月的近 28 日。
+   - 若工具回傳「錯誤」，依錯誤訊息修正參數後再呼叫；不可以在沒有拿到資料的情況下作答。
    - 問「某一天」（例如 9/17、昨天）用 window="day"；「昨天 / 最近一天」= {latest}。
    - 「這週 / 最近一週」用 window="week"；「這個月 / 最近幾週」用 window="month"；「跟去年比 / 長期流失」用 window="year"。
    - filters 是物件，例如 {{"區域": "北區"}}，不要寫成字串。
@@ -168,12 +170,18 @@ class Agent:
             answer = await self._loop(messages, turn, evidence_text, emit)
             bad, feedback = self.problems(answer, turn, evidence_text)
         turn.evidence = [e for e in evidence_text if e.startswith("{")]
-        turn.answer = strip_think(answer)
         turn.ungrounded = bad + ([feedback] if feedback and not bad else [])
-        if bad:
-            turn.answer += f"\n\n> ⚠️ 自動查核：以下數字無法在工具結果中找到，請勿採信：{'、'.join(bad)}"
-        elif feedback:
-            turn.answer += "\n\n> ⚠️ 自動查核：回答中的「是否異常」判斷沒有工具依據，請勿採信。"
+        if feedback:
+            # still unsupported after rewrites: don't show the model's text, say what went wrong instead
+            errors = [json.loads(c["result"]).get("錯誤") for c in turn.tool_calls
+                      if c.get("result", "").startswith('{"錯誤"')]
+            turn.answer = ("**這次無法產生可靠的回答。** 模型的回答裡有工具結果無法支持的內容，已依查核規則拿掉。\n\n"
+                           + (f"- 工具回報：{errors[-1]}\n" if errors else "")
+                           + (f"- 無法查證的數字：{'、'.join(bad)}\n" if bad else "- 回答中的「是否異常」判斷沒有工具依據\n")
+                           + "\n建議換個方式問，寫清楚**日期**（例如 2026-09-17，或整個月 2026-06）、"
+                             "**指標**（銷售額、毛利率、訂單數…）與**範圍**（區域、門市、品類…）。")
+        else:
+            turn.answer = strip_think(answer)
         turn.seconds = time.time() - t0
         return turn
 

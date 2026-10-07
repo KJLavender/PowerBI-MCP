@@ -5,6 +5,7 @@ Every function returns plain JSON-serialisable dicts. Numbers come with pre-form
 Each call opens a short-lived read-only DuckDB connection, so the daily snapshot job can still write.
 """
 import json
+import re
 from contextlib import contextmanager
 from datetime import date, timedelta
 from functools import lru_cache
@@ -57,13 +58,49 @@ def pct(kind: str, v: float | None) -> str:
     return f"{v * 100:+.1f} 個百分點" if kind == "abs" else f"{v:+.1%}"
 
 
-def parse_date(s: str | None) -> date | None:
+MONTH_ONLY = re.compile(r"^\s*(\d{4})\s*[-/年.]\s*(\d{1,2})\s*月?\s*$")
+FULL_DATE = re.compile(r"^\s*(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})\s*日?\s*$")
+
+
+def parse_period(s: str | None) -> tuple[date | None, bool]:
+    """'2026-06-30' / '2026/6/30' / '2026年6月30日' -> (date, False);
+    '2026-06' / '2026/6' / '2026年6月' -> (last day of that month, True)."""
     if not s:
+        return None, False
+    if m := FULL_DATE.match(s):
+        try:
+            return date(int(m[1]), int(m[2]), int(m[3])), False
+        except ValueError:
+            pass
+    elif m := MONTH_ONLY.match(s):
+        y, mo = int(m[1]), int(m[2])
+        if 1 <= mo <= 12:
+            nxt = date(y + (mo == 12), mo % 12 + 1, 1)
+            return nxt - timedelta(days=1), True
+    raise ToolError(f"看不懂日期 {s!r}：請用 YYYY-MM-DD（某一天）或 YYYY-MM（整個月）")
+
+
+def parse_date(s: str | None) -> date | None:
+    return parse_period(s)[0]
+
+
+def clamp_to_data(d: date | None) -> date | None:
+    """A month that is still running ends at the latest loaded day."""
+    if d is None:
         return None
-    try:
-        return date.fromisoformat(s)
-    except ValueError:
-        raise ToolError(f"日期格式需為 YYYY-MM-DD，收到 {s!r}") from None
+    with store.open_db(read_only=True) as db:
+        last = store.last_snapshot_date(db)
+    return min(d, last) if last else d
+
+
+def resolve_period(date_str: str | None, window: str) -> tuple[date | None, str, str | None]:
+    """Date + window from user input; a month means 'the 28 days ending that month'."""
+    d, is_month = parse_period(date_str)
+    if not is_month:
+        return d, window, None
+    d = clamp_to_data(d)
+    w = window if window in ("month", "year") else "month"
+    return d, w, f"「{date_str}」解讀為整個月：使用截至 {d} 的近 28 日（window={w}）"
 
 
 @lru_cache(maxsize=1)
@@ -260,7 +297,7 @@ def _finding_from_json(f: dict) -> dict:
 def metric_change(metric: str | None = None, filters: dict | None = None, date_str: str | None = None,
                   window: str = "day") -> dict:
     """Value and change of one metric (or all report metrics) for a scope, date and window."""
-    d = parse_date(date_str)
+    d, window, note = resolve_period(date_str, window)
     window = window_name(window)
     with engine_at(d) as (e, d):
         scope = resolve_scope(e, filters)
@@ -274,14 +311,17 @@ def metric_change(metric: str | None = None, filters: dict | None = None, date_s
             s = e.stat(bases, m, window, e.z_threshold(scope), member=bool(scope))
             stats.append({**stat_dict(e, s), "判讀": reading(e, s, scope)} if s
                          else {"指標": m, "說明": "歷史資料不足，無法比較"})
-        return {"範圍": e.label(scope), "日期": str(d), "期間": period_text(e, d, window), "結果": stats,
-                "顯著的定義": f"z 值絕對值 ≥ {e.z_threshold(scope)} 且變動夠大"}
+        out = {"範圍": e.label(scope), "日期": str(d), "期間": period_text(e, d, window), "結果": stats,
+               "顯著的定義": f"z 值絕對值 ≥ {e.z_threshold(scope)} 且變動夠大"}
+        if note:
+            out["日期解讀"] = note
+        return out
 
 
 def explain_change(metric: str, filters: dict | None = None, date_str: str | None = None,
                    window: str = "day") -> dict:
     """Why did a metric change for a scope? Evidence from the data along the model's relationships."""
-    d = parse_date(date_str)
+    d, window, note = resolve_period(date_str, window)
     window = window_name(window)
     metric = metric_name(metric)
     c = ctx()
@@ -295,6 +335,8 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
             raise ToolError("歷史資料不足，無法比較")
         out = {"問題": f"{e.label(scope)} 的 {metric}（{e.windows[window]['label']}，{d}）",
                "期間": period_text(e, d, window), "變化": stat_dict(e, s), "判讀": reading(e, s, scope)}
+        if note:
+            out["日期解讀"] = note
 
         # 1) same scope, other metrics → volume / price / discount / cost pattern
         others = []
@@ -305,6 +347,9 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
             if st:
                 others.append(stat_dict(e, st)["display"])
         out["同範圍其他指標"] = others
+        pattern = volume_price_reading(e, bases, scope, window)
+        if pattern:
+            out["量價判讀"] = pattern
 
         # 2) model identities (e.g. 銷售額 = 訂單數 × 客單價)
         ident = []
@@ -338,6 +383,84 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
         notes += [n for n in f.notes if n not in notes]
         out["脈絡"] = notes or ["無節日、新店或資料品質問題"]
         return out
+
+
+def volume_price_reading(e: Engine, bases: dict, scope: dict, window: str) -> list[str]:
+    """Deterministic reading of volume / price / discount / margin moves for the scope, so a small model
+    doesn't have to infer them (e.g. 'price flat but margin down → unit cost went up')."""
+    th = e.th
+    st = {}
+    for m in ("銷售數量", "訂單數", "平均成交單價", "折扣率", "毛利率"):
+        if m in ctx().formulas and e.allowed(m, tuple(scope)):
+            s = e.stat(bases, m, window, member=bool(scope))
+            if s:
+                st[m] = s
+
+    def moved(m: str) -> int:
+        if m not in st:
+            return 0
+        s = st[m]
+        limit = th["min_ratio_change"] if s.kind == "abs" else th["min_change_pct"]
+        return 0 if abs(s.change) < limit else (1 if s.change > 0 else -1)
+
+    def show(m: str) -> str:
+        return f"{m} {pct(st[m].kind, st[m].change)}"
+
+    out = []
+    vol = "銷售數量" if "銷售數量" in st else "訂單數"
+    tags = []
+    if moved(vol):
+        tags.append(("量增" if moved(vol) > 0 else "量減") + f"（{show(vol)}）")
+    index = like_for_like_price(e, scope, window)
+    price_move = 0
+    if index is not None and abs(index) >= 0.02:
+        price_move = 1 if index > 0 else -1
+        tags.append(("價升" if index > 0 else "價降") + f"（同品項售價 {index:+.1%}，已排除商品組合影響）")
+    elif index is None and moved("平均成交單價"):
+        price_move = moved("平均成交單價")
+        tags.append(("價升" if price_move > 0 else "價降") + f"（{show('平均成交單價')}）")
+    if moved("折扣率"):
+        tags.append(("折扣加深" if moved("折扣率") > 0 else "折扣減少") + f"（{show('折扣率')}）")
+    if moved("毛利率"):
+        tags.append(("毛利率上升" if moved("毛利率") > 0 else "毛利率下降") + f"（{show('毛利率')}）")
+    if tags:
+        out.append("型態：" + "、".join(tags))
+    margin, price, disc = moved("毛利率"), price_move, moved("折扣率")
+    if margin > 0 and price > 0:
+        out.append("毛利率上升時售價也上升：主要來自價格調整（漲價）")
+    elif margin < 0 and disc > 0:
+        out.append("毛利率下降時折扣加深：主要來自折扣／促銷")
+    elif margin < 0 and price <= 0 and disc <= 0:
+        out.append("售價與折扣沒有同步變化，但毛利率下降：代表單位成本上升（或低毛利商品占比提高）")
+    elif margin > 0 and price <= 0 and disc >= 0:
+        out.append("售價沒有上升，但毛利率上升：代表單位成本下降（或高毛利商品占比提高）")
+    if moved(vol) < 0 and price > 0:
+        out.append("售價上升同時銷量下降：可能是漲價影響買氣（資料只能顯示同時發生，無法證明因果）")
+    return out
+
+
+def like_for_like_price(e: Engine, scope: dict, window: str, item_dim: str = "product") -> float | None:
+    """Laspeyres price index for the scope: Σ p1·q0 / Σ p0·q0 − 1 over the items (products) sold in both
+    periods. Unlike the average price, it is not moved by a shift in product mix."""
+    f = ctx().formulas.get("平均成交單價")
+    if item_dim not in ctx().dims or not f or not f.numerator or not f.denominator or item_dim in scope:
+        return None
+    cube = e.cube(tuple(scope) + (item_dim,))
+    values = tuple(scope.values())
+    idx = [i for i, m in enumerate(cube.members) if m[:len(values)] == values]
+    if not idx:
+        return None
+    data = {b: a[:, idx] for b, a in cube.data.items()}
+    days, mode = e.windows[window]["days"], e.windows[window].get("mode", "pop")
+    cur_b, base_b = windowed(data, window, days, mode)
+    cur, base = {b: a[-1] for b, a in cur_b.items()}, {b: a[-1] for b, a in base_b.items()}
+    n1, d1 = evaluate(f.numerator, cur), evaluate(f.denominator, cur)
+    n0, d0 = evaluate(f.numerator, base), evaluate(f.denominator, base)
+    ok = (d1 > 0) & (d0 > 0)
+    if not ok.any():
+        return None
+    p1, p0, q0 = n1[ok] / d1[ok], n0[ok] / d0[ok], d0[ok]
+    return float((p1 * q0).sum() / (p0 * q0).sum() - 1)
 
 
 def breakdown(e: Engine, scope: dict, metric: str, window: str, s: Stat, top: int = 4) -> list[dict]:
@@ -447,9 +570,10 @@ def metric_trend(metric: str, filters: dict | None = None, start: str | None = N
                  grain: str = "week") -> dict:
     """Time series of a metric for a scope (grain: day / week)."""
     metric = metric_name(metric)
-    d1 = parse_date(end)
+    d1 = clamp_to_data(parse_date(end))
     with engine_at(d1) as (e, d1):
-        d0 = parse_date(start) or d1 - timedelta(days=83)
+        d0, start_is_month = parse_period(start)
+        d0 = d0.replace(day=1) if start_is_month else (d0 or d1 - timedelta(days=83))
         if (d1 - d0).days > 400:
             raise ToolError("期間最多 400 天")
         scope = resolve_scope(e, filters)

@@ -13,5 +13,7 @@ if (-not (Test-Up)) {
         -RedirectStandardOutput (Join-Path $logs 'chat.out.log') -RedirectStandardError (Join-Path $logs 'chat.err.log')
     for ($i = 0; $i -lt 60 -and -not (Test-Up); $i++) { Start-Sleep -Seconds 2 }
 }
-if (Test-Up) { "chat page: $url" } else { throw "chat server did not start, see logs\chat.err.log" }
-if (-not $NoBrowser) { Start-Process $url }
+if (Test-Up) { "report + chat: http://localhost:$Port  (chat only: http://localhost:$Port/chat)" }
+else { throw "chat server did not start, see logs\chat.err.log" }
+# open via localhost: same host name as the embedded Report Server report, so its sign-in cookies work
+if (-not $NoBrowser) { Start-Process "http://localhost:$Port" }

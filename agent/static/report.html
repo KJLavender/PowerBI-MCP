@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>報表 + 問答助理</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; background: #f6f7f9; }
+  .bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: #1f2937; color: #fff; font-size: 14px; }
+  .bar .title { font-weight: 600; }
+  .bar .spacer { flex: 1; }
+  .bar button, .bar a { color: #fff; background: #374151; border: none; border-radius: 6px; padding: 6px 12px;
+                        font-size: 13px; cursor: pointer; text-decoration: none; }
+  .bar button:hover, .bar a:hover { background: #4b5563; }
+  .layout { flex: 1; display: flex; min-height: 0; }
+  .report { flex: 1; min-width: 0; border: none; background: #fff; }
+  .handle { width: 6px; cursor: col-resize; background: #e5e7eb; }
+  .handle:hover, .handle.dragging { background: #2563eb; }
+  .chat { width: 440px; min-width: 320px; max-width: 70vw; border: none; background: #f6f7f9; }
+  body.collapsed .chat, body.collapsed .handle { display: none; }
+  body.dragging iframe { pointer-events: none; }  /* keep mouse events while resizing over iframes */
+</style>
+</head>
+<body>
+<div class="bar">
+  <span class="title">零售銷售報表</span>
+  <span id="info"></span>
+  <span class="spacer"></span>
+  <a id="open" target="_blank" rel="noopener">在新分頁開啟報表</a>
+  <button id="toggle" type="button">隱藏問答</button>
+</div>
+<div class="layout">
+  <iframe class="report" id="report" title="Power BI 報表"></iframe>
+  <div class="handle" id="handle" title="拖曳調整寬度"></div>
+  <iframe class="chat" id="chat" src="/chat?embed=1" title="問答助理"></iframe>
+</div>
+<script>
+fetch("/api/info").then((r) => r.json()).then((info) => {
+  // the report keeps its sign-in in cookies: serve this page from the same host name as the report,
+  // otherwise (127.0.0.1 vs localhost) the browser treats them as third-party and the report stays blank
+  const reportHost = new URL(info.report_url).hostname;
+  if (location.hostname !== reportHost && ["localhost", "127.0.0.1"].includes(location.hostname)) {
+    location.replace(`${location.protocol}//${reportHost}:${location.port}${location.pathname}`);
+    return;
+  }
+  document.getElementById("report").src = info.report_embed_url;
+  document.getElementById("open").href = info.report_url;
+  document.getElementById("info").textContent = `資料最新到 ${info.latest}`;
+});
+const body = document.body;
+const chat = document.getElementById("chat");
+const saved = localStorage.getItem("chatWidth");
+if (saved) chat.style.width = saved;
+if (localStorage.getItem("chatCollapsed") === "1") body.classList.add("collapsed");
+const toggle = document.getElementById("toggle");
+const label = () => { toggle.textContent = body.classList.contains("collapsed") ? "顯示問答" : "隱藏問答"; };
+label();
+toggle.onclick = () => {
+  body.classList.toggle("collapsed");
+  localStorage.setItem("chatCollapsed", body.classList.contains("collapsed") ? "1" : "0");
+  label();
+};
+const handle = document.getElementById("handle");
+handle.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  body.classList.add("dragging"); handle.classList.add("dragging");
+  const move = (ev) => { chat.style.width = Math.max(320, window.innerWidth - ev.clientX) + "px"; };
+  const up = () => {
+    body.classList.remove("dragging"); handle.classList.remove("dragging");
+    localStorage.setItem("chatWidth", chat.style.width);
+    window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up);
+  };
+  window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+});
+</script>
+</body>
+</html>

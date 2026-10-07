@@ -8,6 +8,7 @@ time because they share a single local GPU. Each tab keeps its own conversation 
 import argparse
 import asyncio
 import json
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,15 +49,26 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
+REPORT_URL = os.environ.get("REPORT_URL", "http://localhost:8081/Reports/powerbi/RetailSales")
+
+
 @app.get("/")
-async def index():
+async def report_with_chat():
+    """Report Server report on the left, chat panel on the right."""
+    return FileResponse(STATIC / "report.html")
+
+
+@app.get("/chat")
+async def chat_page():
     return FileResponse(STATIC / "index.html")
 
 
 @app.get("/api/info")
 async def info():
+    sep = "&" if "?" in REPORT_URL else "?"
     return {"model": State.model, "latest": State.agent.latest, "examples": EXAMPLES,
-            "metrics": State.agent.metrics}
+            "metrics": State.agent.metrics, "report_url": REPORT_URL,
+            "report_embed_url": f"{REPORT_URL}{sep}rs:embed=true"}
 
 
 @app.post("/api/reset")

@@ -46,7 +46,7 @@
   expect: ["無法判斷|無法確認|無法得知|需.{0,4}確認|資料無法"]
 
 - id: daily-summary
-  question: 最近一天的報告有什麼需要注意的？
+  question: 2026-10-05 的每日報告有什麼需要注意的？
   tools: [daily_report]
   expect: ["官網|折扣"]
 
@@ -54,3 +54,10 @@
   question: 客單價是怎麼計算的？資料從哪裡來？
   tools: [metric_lineage, describe_model]
   expect: ["銷售額", "訂單數"]
+
+# 回歸測試：只寫月份（2026/6）時要解讀成整個月，不可在工具報錯時編造數字
+- id: month-input
+  question: 2026/6 的生鮮食品怎麼下降了
+  tools: [explain_change, metric_change]
+  expect: ["正常|不顯著|波動|沒有明顯|未達"]
+  forbid: ["無法產生可靠的回答"]

@@ -59,6 +59,7 @@ class Turn:
     ungrounded: list[str] = field(default_factory=list)
     retries: int = 0
     seconds: float = 0.0
+    evidence: list[str] = field(default_factory=list)  # tool results this answer may quote
 
 
 class Agent:
@@ -67,7 +68,7 @@ class Agent:
         self.model, self.verbose, self.max_steps = model, verbose, max_steps
         self.options = {"num_ctx": num_ctx, "temperature": 0.1}
         self.think = think
-        self.llm = ollama.Client(host=OLLAMA_HOST)
+        self.llm = ollama.AsyncClient(host=OLLAMA_HOST)
         self.stack = AsyncExitStack()
         self.session: ClientSession | None = None
         self.tools: list[dict] = []
@@ -104,14 +105,14 @@ class Agent:
         if self.verbose:
             print(msg, file=sys.stderr, flush=True)
 
-    def chat(self, messages: list[dict], tools: bool = True):
-        return self.llm.chat(model=self.model, messages=messages, tools=self.tools if tools else None,
-                             options=self.options, think=self.think)
+    async def chat(self, messages: list[dict], tools: bool = True):
+        return await self.llm.chat(model=self.model, messages=messages, tools=self.tools if tools else None,
+                                   options=self.options, think=self.think)
 
-    async def _loop(self, messages: list[dict], turn: Turn, evidence_text: list[str]) -> str:
+    async def _loop(self, messages: list[dict], turn: Turn, evidence_text: list[str], emit) -> str:
         """Let the model call tools until it answers."""
         for _ in range(self.max_steps):
-            msg = self.chat(messages).message
+            msg = (await self.chat(messages)).message
             if not msg.tool_calls:
                 return msg.content or ""
             messages.append({"role": "assistant", "content": msg.content or "",
@@ -119,11 +120,13 @@ class Agent:
             for tc in msg.tool_calls:
                 name, args = tc.function.name, dict(tc.function.arguments or {})
                 self.log(f"  → {name}({json.dumps(args, ensure_ascii=False)})")
+                await emit({"type": "tool", "name": name, "args": args})
                 result = await self.call(name, args)
-                turn.tool_calls.append({"tool": name, "args": args})
+                turn.tool_calls.append({"tool": name, "args": args, "result": result})
                 evidence_text.append(result)
                 messages.append({"role": "tool", "content": result, "tool_name": name})
-        msg = self.chat(messages + [{"role": "user", "content": "請根據以上工具結果直接作答。"}], tools=False).message
+        await emit({"type": "status", "text": "整理回答中"})
+        msg = (await self.chat(messages + [{"role": "user", "content": "請根據以上工具結果直接作答。"}], tools=False)).message
         return msg.content or ""
 
     def problems(self, answer: str, turn: Turn, evidence_text: list[str]) -> tuple[list[str], str | None]:
@@ -137,22 +140,34 @@ class Agent:
             return [], claim
         return [], None
 
-    async def ask(self, question: str) -> Turn:
+    async def ask(self, question: str, history: list[Turn] | None = None, on_event=None) -> Turn:
+        """Answer one question. history: earlier turns of the same conversation (for follow-ups such as
+        「那南區呢？」); their tool results stay valid evidence. on_event: async callback for progress."""
+        async def emit(event: dict) -> None:
+            if on_event:
+                await on_event(event)
+
         t0 = time.time()
         turn = Turn(question)
-        messages = [{"role": "system", "content": SYSTEM.format(latest=self.latest, metrics=self.metrics, dims=self.dims)},
-                    {"role": "user", "content": question}]
+        messages = [{"role": "system", "content": SYSTEM.format(latest=self.latest, metrics=self.metrics, dims=self.dims)}]
         evidence_text = [question, self.latest]
-        answer = await self._loop(messages, turn, evidence_text)
+        for past in (history or [])[-3:]:
+            messages += [{"role": "user", "content": past.question},
+                         {"role": "assistant", "content": past.answer.split("\n\n> ⚠️")[0]}]
+            evidence_text += past.evidence + [past.question]
+        messages.append({"role": "user", "content": question})
+        answer = await self._loop(messages, turn, evidence_text, emit)
 
         # grounding: numbers must come from tool results; significance claims need a significance tool
         bad, feedback = self.problems(answer, turn, evidence_text)
         while feedback and turn.retries < 2:
             turn.retries += 1
             self.log(f"  ✗ {feedback}")
+            await emit({"type": "retry", "text": "自動查核未通過，要求模型依工具結果重寫"})
             messages += [{"role": "assistant", "content": answer}, {"role": "user", "content": feedback}]
-            answer = await self._loop(messages, turn, evidence_text)
+            answer = await self._loop(messages, turn, evidence_text, emit)
             bad, feedback = self.problems(answer, turn, evidence_text)
+        turn.evidence = [e for e in evidence_text if e.startswith("{")]
         turn.answer = strip_think(answer)
         turn.ungrounded = bad + ([feedback] if feedback and not bad else [])
         if bad:

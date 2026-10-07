@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>報表問答助理</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1f2328; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #2563eb; --accent-soft: #eff4ff; --ok: #15803d; --ok-soft: #ecfdf3; --warn: #b45309; --warn-soft: #fff7ed;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; background: var(--bg); color: var(--text);
+         height: 100vh; display: flex; flex-direction: column; }
+  header { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 20px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  header a, header button { font-size: 13px; color: var(--accent); background: none; border: 1px solid var(--line);
+                            border-radius: 6px; padding: 6px 10px; cursor: pointer; text-decoration: none; }
+  header a:hover, header button:hover { background: var(--accent-soft); }
+  main { flex: 1; overflow-y: auto; padding: 24px 0; }
+  .thread { max-width: 860px; margin: 0 auto; padding: 0 20px; display: flex; flex-direction: column; gap: 18px; }
+  .welcome { text-align: center; color: var(--muted); margin-top: 40px; }
+  .welcome h2 { color: var(--text); font-size: 22px; margin-bottom: 6px; }
+  .examples { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }
+  .examples button { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px;
+                     font-size: 14px; cursor: pointer; color: var(--text); }
+  .examples button:hover { border-color: var(--accent); color: var(--accent); }
+  .msg { display: flex; flex-direction: column; gap: 6px; }
+  .msg.user { align-items: flex-end; }
+  .bubble { max-width: 100%; border-radius: 12px; padding: 12px 16px; line-height: 1.65; font-size: 15px; }
+  .user .bubble { background: var(--accent); color: #fff; max-width: 80%; white-space: pre-wrap; }
+  .bot .bubble { background: var(--panel); border: 1px solid var(--line); }
+  .steps { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .steps .step::before { content: "› "; }
+  .steps .step.active::after { content: " …"; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .2; } }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 6px; padding: 3px 8px; }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .footer { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  details { font-size: 13px; }
+  details summary { cursor: pointer; color: var(--muted); }
+  details pre { background: #f3f4f6; border-radius: 8px; padding: 10px; overflow-x: auto; max-height: 320px;
+                font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+  .bubble p { margin: 0 0 8px; } .bubble p:last-child { margin-bottom: 0; }
+  .bubble ul, .bubble ol { margin: 4px 0 8px; padding-left: 22px; }
+  .bubble blockquote { margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--warn); background: var(--warn-soft); border-radius: 4px; }
+  .bubble table { border-collapse: collapse; margin: 8px 0; font-size: 14px; }
+  .bubble th, .bubble td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+  .bubble code { background: #f3f4f6; border-radius: 4px; padding: 1px 5px; font-size: 13px; }
+  .bubble h3, .bubble h4 { margin: 10px 0 6px; font-size: 15px; }
+  .error { color: #b91c1c; }
+  form { background: var(--panel); border-top: 1px solid var(--line); padding: 14px 20px; }
+  .composer { max-width: 860px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: inherit;
+             font-size: 15px; min-height: 46px; max-height: 160px; outline: none; }
+  textarea:focus { border-color: var(--accent); }
+  .send { background: var(--accent); color: #fff; border: none; border-radius: 10px; padding: 0 18px; height: 46px;
+          font-size: 15px; cursor: pointer; }
+  .send:disabled { opacity: .5; cursor: not-allowed; }
+  .hint { max-width: 860px; margin: 6px auto 0; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>報表問答助理</h1>
+  <span class="meta" id="meta">連線中…</span>
+  <span class="spacer"></span>
+  <a href="http://localhost:8081/Reports/powerbi/RetailSales" target="_blank" rel="noopener">開啟報表</a>
+  <button id="reset" type="button">新對話</button>
+</header>
+
+<main id="main">
+  <div class="thread" id="thread">
+    <div class="welcome" id="welcome">
+      <h2>問問報表為什麼變了</h2>
+      <div>所有數字都由程式依 Power BI 模型計算，回答會自動查核；資料不會離開這台電腦。</div>
+      <div class="examples" id="examples"></div>
+    </div>
+  </div>
+</main>
+
+<form id="form">
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="例如：為什麼 2026-09-17 北區的銷售額下降？（Enter 送出，Shift+Enter 換行）"></textarea>
+    <button class="send" id="send" type="submit">送出</button>
+  </div>
+  <div class="hint">提示：寫清楚日期與範圍（區域、門市、通路、品類、商品、顧客分群）會更準確；可以直接追問「那南區呢？」</div>
+</form>
+
+<script>
+const TOOL_LABELS = {
+  explain_change: "分析變化原因", metric_change: "查詢指標變化", metric_trend: "查詢趨勢",
+  daily_report: "讀取每日報告", data_quality: "檢查資料品質", metric_lineage: "查詢指標來源",
+  describe_model: "讀取模型結構", list_members: "查詢維度成員",
+};
+let session = crypto.randomUUID();
+let busy = false;
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function inline(s) {
+  return escapeHtml(s)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
+// small Markdown renderer: paragraphs, headings, lists, quotes, tables (enough for the agent's answers)
+function markdown(text) {
+  const lines = text.replace(/\r/g, "").split("\n");
+  let html = "", list = null, para = [], i = 0;
+  const flushPara = () => { if (para.length) { html += `<p>${para.map(inline).join("<br>")}</p>`; para = []; } };
+  const closeList = () => { if (list) { html += `</${list}>`; list = null; } };
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      flushPara(); closeList();
+      const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+      html += "<table><tr>" + cells(line).map((c) => `<th>${c}</th>`).join("") + "</tr>";
+      i += 2;
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) {
+        html += "<tr>" + cells(lines[i]).map((c) => `<td>${c}</td>`).join("") + "</tr>"; i++;
+      }
+      html += "</table>"; continue;
+    }
+    let m;
+    if ((m = line.match(/^\s*#{1,4}\s+(.*)$/))) { flushPara(); closeList(); html += `<h4>${inline(m[1])}</h4>`; }
+    else if ((m = line.match(/^\s*[-*•]\s+(.*)$/))) { flushPara(); if (list !== "ul") { closeList(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = line.match(/^\s*\d+[.)]\s+(.*)$/))) { flushPara(); if (list !== "ol") { closeList(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = line.match(/^\s*>\s?(.*)$/))) { flushPara(); closeList(); html += `<blockquote>${inline(m[1])}</blockquote>`; }
+    else if (!line.trim()) { flushPara(); closeList(); }
+    else { closeList(); para.push(line); }
+    i++;
+  }
+  flushPara(); closeList();
+  return html;
+}
+
+function addUser(text) {
+  $("welcome")?.remove();
+  const el = document.createElement("div");
+  el.className = "msg user";
+  el.innerHTML = `<div class="bubble">${escapeHtml(text)}</div>`;
+  $("thread").appendChild(el);
+}
+function addBot() {
+  const el = document.createElement("div");
+  el.className = "msg bot";
+  el.innerHTML = `<div class="steps"></div>`;
+  $("thread").appendChild(el);
+  return el;
+}
+function step(el, text) {
+  const steps = el.querySelector(".steps");
+  steps.querySelectorAll(".active").forEach((s) => s.classList.remove("active"));
+  const s = document.createElement("div");
+  s.className = "step active";
+  s.textContent = text;
+  steps.appendChild(s);
+  scrollDown();
+}
+function describeTool(ev) {
+  const a = ev.args || {};
+  const parts = [a.metric, a.filters && (typeof a.filters === "string" ? a.filters : Object.values(a.filters).join(" × ")),
+                 a.date, a.window, a.dimension].filter(Boolean);
+  return `${TOOL_LABELS[ev.name] || ev.name}${parts.length ? "：" + parts.join("，") : ""}`;
+}
+function finish(el, ev) {
+  el.querySelectorAll(".active").forEach((s) => s.classList.remove("active"));
+  const badge = ev.grounded
+    ? `<span class="badge ok">✓ 數字已查核，皆來自工具結果</span>`
+    : `<span class="badge warn">⚠ 有無法查證的內容，請看回答末尾說明</span>`;
+  const tools = ev.tools.map((t) => {
+    let pretty = t.result;
+    try { pretty = JSON.stringify(JSON.parse(t.result), null, 2); } catch (e) {}
+    return `<details><summary>${escapeHtml(describeTool(t))}</summary><pre>${escapeHtml(pretty)}</pre></details>`;
+  }).join("");
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.innerHTML = markdown(ev.text);
+  el.appendChild(bubble);
+  const footer = document.createElement("div");
+  footer.className = "footer";
+  footer.innerHTML = `${badge}<span>${ev.tools.length} 次查詢 · ${ev.seconds} 秒${ev.retries ? ` · 重寫 ${ev.retries} 次` : ""}</span>`;
+  el.appendChild(footer);
+  if (tools) {
+    const d = document.createElement("details");
+    d.innerHTML = `<summary>查看證據（工具結果）</summary>${tools}`;
+    el.appendChild(d);
+  }
+  scrollDown();
+}
+function scrollDown() { const m = $("main"); m.scrollTop = m.scrollHeight; }
+
+async function ask(question) {
+  if (busy || !question.trim()) return;
+  busy = true; $("send").disabled = true;
+  addUser(question);
+  const el = addBot();
+  try {
+    const resp = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
+                                            body: JSON.stringify({ session, question }) });
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buffer.indexOf("\n\n")) >= 0) {
+        const chunk = buffer.slice(0, idx); buffer = buffer.slice(idx + 2);
+        if (!chunk.startsWith("data: ")) continue;
+        const ev = JSON.parse(chunk.slice(6));
+        if (ev.type === "tool") step(el, describeTool(ev));
+        else if (ev.type === "status" || ev.type === "retry") step(el, ev.text);
+        else if (ev.type === "answer") finish(el, ev);
+        else if (ev.type === "error") el.insertAdjacentHTML("beforeend", `<div class="bubble error">發生錯誤：${escapeHtml(ev.text)}</div>`);
+      }
+    }
+  } catch (e) {
+    el.insertAdjacentHTML("beforeend", `<div class="bubble error">連線失敗：${escapeHtml(String(e))}</div>`);
+  } finally {
+    busy = false; $("send").disabled = false; $("input").focus();
+  }
+}
+
+$("form").addEventListener("submit", (e) => { e.preventDefault(); const q = $("input").value; $("input").value = ""; autosize(); ask(q); });
+$("input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("form").requestSubmit(); }
+});
+function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; }
+$("input").addEventListener("input", autosize);
+$("reset").addEventListener("click", async () => {
+  await fetch("/api/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session }) });
+  location.reload();
+});
+
+fetch("/api/info").then((r) => r.json()).then((info) => {
+  $("meta").textContent = `資料最新到 ${info.latest} · 模型 ${info.model} · 本機執行`;
+  for (const q of info.examples) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = q;
+    b.onclick = () => ask(q);
+    $("examples").appendChild(b);
+  }
+}).catch(() => { $("meta").textContent = "無法連線到後端"; });
+</script>
+</body>
+</html>

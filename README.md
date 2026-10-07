@@ -14,7 +14,7 @@ Nothing leaves the machine: the data source, the analysis, the MCP server and th
 |---|---|
 | 1. Simulated enterprise source | Oracle Database (Docker in WSL) refreshed daily by an ETL simulator; Power BI project generated as code (TMDL + PBIR) |
 | 2. Daily change analysis | Reads measures/relationships from the Power BI project, snapshots to DuckDB, detects significant changes and picks the scope that explains them. **6/6 injected scenarios detected** (4 on day 0) |
-| 3. "Why" Q&A | Read-only MCP server + local Ollama model. Every number must appear in a tool result, verdicts like "significant" need a tool that judged significance. **10/10 Q&A tests passed**, including trap questions |
+| 3. "Why" Q&A | Local web chat page (follow-up questions, live progress, evidence view) on a read-only MCP server + local Ollama model. Every number must appear in a tool result, verdicts like "significant" need a tool that judged significance. **10/10 Q&A tests passed**, including trap questions |
 | 4. Report Server | Power BI Report Server with a daily 06:30 scheduled refresh from Oracle — the typical on-prem setup |
 
 Example (from `python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`):
@@ -62,6 +62,7 @@ python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m analysis evaluate             # score against the scenarios
 
 # Phase 3 — ask why, with a local model
+.\scripts\start-chat.ps1                                # chat page on http://127.0.0.1:8090 (or double-click 報表問答助理.cmd)
 .\.venv\Scripts\python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？" -v
 .\.venv\Scripts\python -m agent chat
 .\.venv\Scripts\python -m agent evaluate

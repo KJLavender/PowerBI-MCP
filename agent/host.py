@@ -142,9 +142,11 @@ class Agent:
             return [], claim
         return [], None
 
-    async def ask(self, question: str, history: list[Turn] | None = None, on_event=None) -> Turn:
+    async def ask(self, question: str, history: list[Turn] | None = None, on_event=None,
+                  context: str | None = None) -> Turn:
         """Answer one question. history: earlier turns of the same conversation (for follow-ups such as
-        「那南區呢？」); their tool results stay valid evidence. on_event: async callback for progress."""
+        「那南區呢？」); their tool results stay valid evidence. on_event: async callback for progress.
+        context: what the user currently has selected next to the report (filters, date, window)."""
         async def emit(event: dict) -> None:
             if on_event:
                 await on_event(event)
@@ -157,6 +159,11 @@ class Agent:
             messages += [{"role": "user", "content": past.question},
                          {"role": "assistant", "content": past.answer.split("\n\n> ⚠️")[0]}]
             evidence_text += past.evidence + [past.question]
+        if context:
+            messages.append({"role": "system", "content":
+                             f"使用者目前在報表上的篩選：{context}。問題若沒有指定日期、範圍或時間窗，就沿用這些篩選"
+                             "（filters 用同樣的維度與成員）；問題有指定時，以問題為準。"})
+            evidence_text.append(context)
         messages.append({"role": "user", "content": question})
         answer = await self._loop(messages, turn, evidence_text, emit)
 

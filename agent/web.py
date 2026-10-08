@@ -17,6 +17,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+from analysis import tools
+
 from .host import DEFAULT_MODEL, Agent, Turn
 
 STATIC = Path(__file__).with_name("static")
@@ -71,6 +73,79 @@ async def info():
             "report_embed_url": f"{REPORT_URL}{sep}rs:embed=true"}
 
 
+@app.get("/api/context-options")
+async def context_options():
+    """Selectors for the shared filter bar: dimensions with members and the model column each one filters
+    in the report (Table/Column for Report Server URL filters)."""
+    c = tools.ctx()
+    dims = []
+    for k, d in c.dims.items():
+        members = tools.list_members(d.label)["成員（依近 28 日交易量排序）"]
+        dims.append({"key": k, "label": d.label, "field": f"{d.table}/{d.column}", "members": sorted(members)})
+    with tools.store.open_db(read_only=True) as db:
+        first, last = db.execute("SELECT min(business_date), max(business_date) FROM snapshot_log").fetchone()
+    date_dim = c.date_dim
+    return {"dims": dims, "date_field": f"{date_dim.table}/{date_dim.column}", "min": str(first), "max": str(last),
+            "windows": {k: v["label"] for k, v in c.config["windows"].items()}}
+
+
+def focus_of(turn: Turn) -> dict | None:
+    """The scope the answer was about (from its last analysis tool call) + the report page that shows it."""
+    c = tools.ctx()
+    by_key = {k: d.label for k, d in c.dims.items()}
+    for call in reversed(turn.tool_calls):
+        if call["tool"] not in ("explain_change", "metric_change", "metric_trend", "data_quality"):
+            continue
+        args = call["args"]
+        filters = args.get("filters") or {}
+        if isinstance(filters, str):
+            try:
+                filters = json.loads(filters) if filters.strip() else {}
+            except json.JSONDecodeError:
+                filters = {}
+        filters = {by_key.get(k, k): v for k, v in filters.items()}
+        date = args.get("date") or args.get("end")
+        try:
+            d, _ = tools.parse_period(date)
+        except tools.ToolError:
+            d = None
+        window = args.get("window", "day") if call["tool"] != "data_quality" else "day"
+        return {"filters": filters, "date": str(tools.clamp_to_data(d)) if d else None,
+                "month": bool(date and tools.MONTH_ONLY.match(date)), "window": window,
+                "metric": args.get("metric"), "page": best_page(filters, call["tool"])}
+    return None
+
+
+def best_page(filters: dict, tool: str) -> str | None:
+    """Report page whose visuals use the most of the focus dimensions (read from the PBIR report)."""
+    c = tools.ctx()
+    if tool == "data_quality":
+        wanted = {f"{c.config['data_quality']['etl_table']}."}
+    else:
+        wanted = {f"{d.table}.{d.column}" for d in c.dims.values() if d.label in filters}
+    if not wanted:
+        return None
+    scores: dict[str, int] = {}
+    for u in c.model.usage:
+        hits = sum(1 for col in u.columns for w in wanted if col.startswith(w) or col == w)
+        scores[u.page] = scores.get(u.page, 0) + hits
+    page, score = max(scores.items(), key=lambda kv: kv[1], default=(None, 0))
+    return page if score else None
+
+
+def context_text(ctx: dict | None) -> str | None:
+    if not ctx:
+        return None
+    parts = [f"{k}={v}" for k, v in (ctx.get("filters") or {}).items() if v]
+    if ctx.get("date"):
+        parts.append(f"date={ctx['date']}")
+    if not parts:
+        return None  # nothing selected: don't nudge the model with just the default window
+    if ctx.get("window"):
+        parts.append(f"window={ctx['window']}")
+    return "、".join(parts)
+
+
 @app.post("/api/reset")
 async def reset(request: Request):
     body = await request.json()
@@ -97,10 +172,12 @@ async def chat(request: Request):
             async with State.lock:
                 await queue.put({"type": "status", "text": "思考中"})
                 history = State.conversations.setdefault(session, [])
-                turn = await State.agent.ask(question, history=history, on_event=on_event)
+                turn = await State.agent.ask(question, history=history, on_event=on_event,
+                                             context=context_text(body.get("context")))
                 history.append(turn)
                 del history[:-6]
                 await queue.put({"type": "answer", "text": turn.answer, "grounded": not turn.ungrounded,
+                                 "focus": focus_of(turn) if not turn.ungrounded else None,
                                  "retries": turn.retries, "seconds": round(turn.seconds, 1),
                                  "tools": [{"name": c["tool"], "args": c["args"], "result": c.get("result", "")}
                                            for c in turn.tool_calls]})

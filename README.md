@@ -14,7 +14,7 @@ Nothing leaves the machine: the data source, the analysis, the MCP server and th
 |---|---|
 | 1. Simulated enterprise source | Oracle Database (Docker in WSL) refreshed daily by an ETL simulator; Power BI project generated as code (TMDL + PBIR) |
 | 2. Daily change analysis | Reads measures/relationships from the Power BI project, snapshots to DuckDB, detects significant changes and picks the scope that explains them. **6/6 injected scenarios detected** (4 on day 0) |
-| 3. "Why" Q&A | Chat panel next to the Report Server report (follow-up questions, live progress, evidence view) on a read-only MCP server + local Ollama model. Every number must appear in a tool result, verdicts like "significant" need a tool that judged significance. **11/11 Q&A tests passed**, including trap questions |
+| 3. "Why" Q&A | Chat panel next to the Report Server report, linked to it through a shared filter bar (filters drive both the report and the questions; answers can apply their scope to the report), with follow-up questions, live progress and an evidence view — on a read-only MCP server + local Ollama model. Every number must appear in a tool result, verdicts like "significant" need a tool that judged significance. **11/11 Q&A tests passed**, including trap questions |
 | 4. Report Server | Power BI Report Server with a daily 06:30 scheduled refresh from Oracle — the typical on-prem setup |
 
 Example (from `python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`):

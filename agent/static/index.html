@@ -75,6 +75,12 @@
   body.embed .user .bubble { max-width: 92%; }
   body.embed form { padding: 10px 12px; }
   body.embed .hint { display: none; }
+  .context { display: none; max-width: 860px; margin: 0 auto 8px; font-size: 12px; color: #1e40af; background: #eff4ff;
+             border: 1px solid #dbeafe; border-radius: 8px; padding: 5px 10px; }
+  .context.show { display: block; }
+  .focus { align-self: flex-start; font-size: 13px; color: var(--accent); background: var(--accent-soft); border: 1px solid #dbeafe;
+           border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  .focus:hover { background: #dbeafe; }
 </style>
 </head>
 <body>
@@ -97,6 +103,7 @@
 </main>
 
 <form id="form">
+  <div class="context" id="context"></div>
   <div class="composer">
     <textarea id="input" rows="1" placeholder="例如：為什麼 2026-09-17 北區的銷售額下降？（Enter 送出，Shift+Enter 換行）"></textarea>
     <button class="send" id="send" type="submit">送出</button>
@@ -117,6 +124,19 @@ if (new URLSearchParams(location.search).has("embed")) {
 let session = crypto.randomUUID();
 let busy = false;
 const $ = (id) => document.getElementById(id);
+
+// linked to the report page (same origin): read its filter bar, show it, and send answers' scope back
+const host = (() => { try { return window.parent !== window && window.parent.getContext ? window.parent : null; } catch (e) { return null; } })();
+window.onContextChange = (ctx, text) => {
+  const el = $("context");
+  el.textContent = text ? `問題會以報表目前的篩選為準：${text}` : "";
+  el.classList.toggle("show", !!text);
+};
+function focusText(f) {
+  const bits = Object.values(f.filters || {});
+  if (f.date) bits.push(f.month ? f.date.slice(0, 7) : f.date);
+  return bits.join(" × ") || "整體";
+}
 
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -204,6 +224,13 @@ function finish(el, ev) {
   footer.className = "footer";
   footer.innerHTML = `${badge}<span>${ev.tools.length} 次查詢 · ${ev.seconds} 秒${ev.retries ? ` · 重寫 ${ev.retries} 次` : ""}</span>`;
   el.appendChild(footer);
+  if (host && ev.focus) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "focus";
+    b.textContent = `在報表中查看：${focusText(ev.focus)}${ev.focus.page ? `（「${ev.focus.page}」頁）` : ""}`;
+    b.onclick = () => host.applyFocus(ev.focus);
+    el.appendChild(b);
+  }
   if (tools) {
     const d = document.createElement("details");
     d.innerHTML = `<summary>查看證據（工具結果）</summary>${tools}`;
@@ -219,8 +246,9 @@ async function ask(question) {
   addUser(question);
   const el = addBot();
   try {
+    const context = host ? host.getContext() : null;
     const resp = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" },
-                                            body: JSON.stringify({ session, question }) });
+                                            body: JSON.stringify({ session, question, context }) });
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";

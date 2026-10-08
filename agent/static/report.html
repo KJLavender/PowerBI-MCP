@@ -14,13 +14,23 @@
   .bar button, .bar a { color: #fff; background: #374151; border: none; border-radius: 6px; padding: 6px 12px;
                         font-size: 13px; cursor: pointer; text-decoration: none; }
   .bar button:hover, .bar a:hover { background: #4b5563; }
+  .filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 14px; background: #fff;
+             border-bottom: 1px solid #e5e7eb; font-size: 13px; color: #374151; }
+  .filters label { display: inline-flex; align-items: center; gap: 6px; }
+  .filters select, .filters input { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid #d1d5db; border-radius: 6px;
+                                    background: #fff; max-width: 150px; }
+  .filters select.active, .filters input.active { border-color: #2563eb; background: #eff4ff; }
+  .filters .clear { border: 1px solid #d1d5db; background: #fff; border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .filters .period { color: #6b7280; }
+  .notice { display: none; padding: 6px 14px; background: #eff4ff; color: #1e40af; font-size: 13px; border-bottom: 1px solid #dbeafe; }
+  .notice.show { display: block; }
   .layout { flex: 1; display: flex; min-height: 0; }
   .report { flex: 1; min-width: 0; border: none; background: #fff; }
   .handle { width: 6px; cursor: col-resize; background: #e5e7eb; }
   .handle:hover, .handle.dragging { background: #2563eb; }
   .chat { width: 440px; min-width: 320px; max-width: 70vw; border: none; background: #f6f7f9; }
   body.collapsed .chat, body.collapsed .handle { display: none; }
-  body.dragging iframe { pointer-events: none; }  /* keep mouse events while resizing over iframes */
+  body.dragging iframe { pointer-events: none; }
 </style>
 </head>
 <body>
@@ -31,30 +41,130 @@
   <a id="open" target="_blank" rel="noopener">在新分頁開啟報表</a>
   <button id="toggle" type="button">隱藏問答</button>
 </div>
+<div class="filters" id="filters">
+  <label>日期 <input type="date" id="date"></label>
+  <label>比較 <select id="window"></select></label>
+  <span id="dimSelects" style="display:contents"></span>
+  <button class="clear" id="clear" type="button">清除篩選</button>
+  <span class="period" id="period"></span>
+</div>
+<div class="notice" id="notice"></div>
 <div class="layout">
   <iframe class="report" id="report" title="Power BI 報表"></iframe>
   <div class="handle" id="handle" title="拖曳調整寬度"></div>
   <iframe class="chat" id="chat" src="/chat?embed=1" title="問答助理"></iframe>
 </div>
 <script>
-fetch("/api/info").then((r) => r.json()).then((info) => {
-  // the report keeps its sign-in in cookies: serve this page from the same host name as the report,
-  // otherwise (127.0.0.1 vs localhost) the browser treats them as third-party and the report stays blank
+const $ = (id) => document.getElementById(id);
+let info = null, options = null;
+
+// ---------- shared context: the filter bar drives both the report (URL filters) and the chat ----------
+const WINDOW_SPAN = { day: [28, "近 4 週同星期比較"], week: [13, "近 7 日 vs 前 7 日"], month: [55, "近 28 日 vs 前 28 日"], year: [27, "近 28 日"] };
+function addDays(iso, n) { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+
+function getContext() {
+  const filters = {};
+  for (const d of options?.dims || []) { const v = $("dim_" + d.key).value; if (v) filters[d.label] = v; }
+  return { filters, date: $("date").value || null, window: $("window").value || "day" };
+}
+window.getContext = getContext;
+
+function reportUrl(ctx) {
+  const parts = [];
+  for (const d of options.dims) {
+    const v = ctx.filters[d.label];
+    if (v) parts.push(`${d.field} eq '${v.replace(/'/g, "''")}'`);
+  }
+  if (ctx.date) {
+    const [span] = WINDOW_SPAN[ctx.window] || WINDOW_SPAN.day;
+    parts.push(`${options.date_field} ge ${addDays(ctx.date, -span)}`, `${options.date_field} le ${ctx.date}`);
+  }
+  return info.report_embed_url + (parts.length ? "&filter=" + encodeURIComponent(parts.join(" and ")) : "");
+}
+
+function describe(ctx) {
+  const bits = Object.values(ctx.filters);
+  if (ctx.date) bits.push(`${ctx.date}（${options.windows[ctx.window] || ctx.window}）`);
+  return bits.join(" · ");
+}
+
+let lastUrl = "";
+function applyToReport() {
+  const ctx = getContext();
+  for (const d of options.dims) $("dim_" + d.key).classList.toggle("active", !!ctx.filters[d.label]);
+  $("date").classList.toggle("active", !!ctx.date);
+  $("period").textContent = ctx.date
+    ? `報表期間：${addDays(ctx.date, -(WINDOW_SPAN[ctx.window] || WINDOW_SPAN.day)[0])} ～ ${ctx.date}` : "報表期間：全部";
+  const url = reportUrl(ctx);
+  if (url !== lastUrl) { $("report").src = url; lastUrl = url; }
+  // keep the view in the address bar so it can be bookmarked or shared
+  const hasAny = ctx.date || Object.keys(ctx.filters).length;
+  history.replaceState(null, "", hasAny ? "#" + encodeURIComponent(JSON.stringify(ctx)) : location.pathname);
+  $("chat").contentWindow?.onContextChange?.(ctx, describe(ctx));
+}
+window.describeContext = () => describe(getContext());
+
+// called by the chat panel: show the scope an answer was about
+window.applyFocus = (focus) => {
+  for (const d of options.dims) $("dim_" + d.key).value = focus.filters?.[d.label] || "";
+  if (focus.date) $("date").value = focus.date;
+  if (focus.window && options.windows[focus.window]) $("window").value = focus.window;
+  applyToReport();
+  const n = $("notice");
+  n.textContent = focus.page
+    ? `已在報表套用：${describe(getContext())}。相關內容在「${focus.page}」頁籤（請點報表下方的頁籤切換）。`
+    : `已在報表套用：${describe(getContext())}。`;
+  n.classList.add("show");
+};
+
+async function init() {
+  info = await (await fetch("/api/info")).json();
+  // keep the report's sign-in cookies first-party: same host name as the report
   const reportHost = new URL(info.report_url).hostname;
   if (location.hostname !== reportHost && ["localhost", "127.0.0.1"].includes(location.hostname)) {
     location.replace(`${location.protocol}//${reportHost}:${location.port}${location.pathname}`);
     return;
   }
-  document.getElementById("report").src = info.report_embed_url;
-  document.getElementById("open").href = info.report_url;
-  document.getElementById("info").textContent = `資料最新到 ${info.latest}`;
-});
-const body = document.body;
-const chat = document.getElementById("chat");
+  options = await (await fetch("/api/context-options")).json();
+  $("open").href = info.report_url;
+  $("info").textContent = `資料最新到 ${info.latest}`;
+  $("date").min = options.min; $("date").max = options.max;
+  for (const [k, label] of Object.entries(options.windows)) $("window").add(new Option(label, k));
+  for (const d of options.dims) {
+    const sel = document.createElement("select");
+    sel.id = "dim_" + d.key;
+    sel.add(new Option(`${d.label}：全部`, ""));
+    for (const m of d.members) sel.add(new Option(m, m));
+    const label = document.createElement("label");
+    label.append(sel);
+    $("dimSelects").append(label);
+    sel.onchange = () => { $("notice").classList.remove("show"); applyToReport(); };
+  }
+  $("date").onchange = $("window").onchange = () => { $("notice").classList.remove("show"); applyToReport(); };
+  if (location.hash.length > 1) {  // restore a bookmarked / shared view
+    try {
+      const saved = JSON.parse(decodeURIComponent(location.hash.slice(1)));
+      for (const d of options.dims) $("dim_" + d.key).value = saved.filters?.[d.label] || "";
+      if (saved.date) $("date").value = saved.date;
+      if (saved.window) $("window").value = saved.window;
+    } catch (e) { /* ignore a malformed hash */ }
+  }
+  $("clear").onclick = () => {
+    for (const d of options.dims) $("dim_" + d.key).value = "";
+    $("date").value = ""; $("window").value = "day"; $("notice").classList.remove("show");
+    applyToReport();
+  };
+  applyToReport();
+  $("chat").addEventListener("load", applyToReport);
+}
+init();
+
+// ---------- layout ----------
+const body = document.body, chat = $("chat");
 const saved = localStorage.getItem("chatWidth");
 if (saved) chat.style.width = saved;
 if (localStorage.getItem("chatCollapsed") === "1") body.classList.add("collapsed");
-const toggle = document.getElementById("toggle");
+const toggle = $("toggle");
 const label = () => { toggle.textContent = body.classList.contains("collapsed") ? "顯示問答" : "隱藏問答"; };
 label();
 toggle.onclick = () => {
@@ -62,7 +172,7 @@ toggle.onclick = () => {
   localStorage.setItem("chatCollapsed", body.classList.contains("collapsed") ? "1" : "0");
   label();
 };
-const handle = document.getElementById("handle");
+const handle = $("handle");
 handle.addEventListener("mousedown", (e) => {
   e.preventDefault();
   body.classList.add("dragging"); handle.classList.add("dragging");

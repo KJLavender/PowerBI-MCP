@@ -52,7 +52,7 @@ do {
     Start-Sleep -Seconds 10
     $p = Invoke-RestMethod -UseDefaultCredentials "$api/CacheRefreshPlans($($plan.Id))"
     Write-Output "   status: $($p.LastStatus)"
-} until (($p.LastStatus -and $p.LastStatus -notmatch 'Refreshing|New|^$') -or (Get-Date) -gt $deadline)
+} until (($p.LastStatus -match 'Completed|Failed|Error') -or (Get-Date) -gt $deadline)
 $hist = Get-RsRestCacheRefreshPlanHistory -Id $plan.Id -ReportPortalUri $Portal | Select-Object -First 1
 Write-Output "   last run: $($hist.StartTime) -> $($hist.EndTime) $($hist.Status) $($hist.Message)"
 Write-Output "Report: $Portal/powerbi$item"

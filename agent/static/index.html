@@ -81,6 +81,21 @@
   .focus { align-self: flex-start; font-size: 13px; color: var(--accent); background: var(--accent-soft); border: 1px solid #dbeafe;
            border-radius: 8px; padding: 6px 12px; cursor: pointer; }
   .focus:hover { background: #dbeafe; }
+  .drawer { display: none; position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 100%); background: var(--panel);
+            border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0,0,0,.08); z-index: 10; overflow-y: auto; }
+  .drawer.open { display: block; }
+  .drawer-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .drawer-head button { font-size: 13px; color: var(--accent); background: none; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+  .drawer-note { font-size: 12px; color: var(--muted); padding: 8px 16px; }
+  .conv { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .conv:hover { background: var(--accent-soft); }
+  .conv.current { background: var(--accent-soft); border-left: 3px solid var(--accent); }
+  .conv .t { flex: 1; min-width: 0; }
+  .conv .title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv .meta { font-size: 12px; color: var(--muted); }
+  .conv .del { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; }
+  .conv .del:hover { color: #b91c1c; background: #fee2e2; }
+  .empty { padding: 16px; color: var(--muted); font-size: 13px; }
 </style>
 </head>
 <body>
@@ -89,8 +104,14 @@
   <span class="meta" id="meta">連線中…</span>
   <span class="spacer"></span>
   <a id="openReport" href="/" target="_blank" rel="noopener">報表 + 問答</a>
+  <button id="historyBtn" type="button">紀錄</button>
   <button id="reset" type="button">新對話</button>
 </header>
+<div class="drawer" id="drawer">
+  <div class="drawer-head"><strong>對話紀錄</strong><button type="button" id="closeDrawer">關閉</button></div>
+  <div class="drawer-note">紀錄只存在這台電腦（data/chats.sqlite）。</div>
+  <div id="convList"></div>
+</div>
 
 <main id="main">
   <div class="thread" id="thread">
@@ -121,9 +142,64 @@ if (new URLSearchParams(location.search).has("embed")) {
   document.body.classList.add("embed");
   document.getElementById("input").placeholder = "輸入問題，Enter 送出";
 }
-let session = crypto.randomUUID();
-let busy = false;
 const $ = (id) => document.getElementById(id);
+let busy = false;
+let examples = [];
+const welcomeHTML = $("thread").innerHTML;
+// the current conversation survives reloads; older ones are listed under 紀錄
+function newSession() { const id = crypto.randomUUID(); localStorage.setItem("chatSession", id); return id; }
+let session = localStorage.getItem("chatSession") || newSession();
+
+function showWelcome() {
+  $("thread").innerHTML = welcomeHTML;
+  for (const q of examples) {
+    const b = document.createElement("button");
+    b.type = "button"; b.textContent = q;
+    b.onclick = () => ask(q);
+    $("examples").appendChild(b);
+  }
+}
+
+async function loadConversation(id) {
+  const turns = await (await fetch(`/api/conversations/${encodeURIComponent(id)}`)).json();
+  session = id; localStorage.setItem("chatSession", id);
+  if (!turns.length) { showWelcome(); return; }
+  $("thread").innerHTML = "";
+  for (const t of turns) {
+    addUser(t.question);
+    finish(addBot(), { text: t.answer, grounded: t.grounded, retries: t.retries, seconds: t.seconds,
+                       tools: t.tools, focus: t.focus, when: t.created_at });
+  }
+  scrollDown();
+}
+
+function timeText(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("zh-TW", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+async function openDrawer() {
+  const list = await (await fetch("/api/conversations")).json();
+  const box = $("convList");
+  box.innerHTML = list.length ? "" : `<div class="empty">還沒有對話紀錄。</div>`;
+  for (const c of list) {
+    const row = document.createElement("div");
+    row.className = "conv" + (c.id === session ? " current" : "");
+    row.innerHTML = `<div class="t"><div class="title"></div><div class="meta">${timeText(c.updated_at)} · ${c.turns} 則問答</div></div>
+                     <button class="del" type="button" title="刪除">✕</button>`;
+    row.querySelector(".title").textContent = c.title;
+    row.onclick = async () => { $("drawer").classList.remove("open"); await loadConversation(c.id); };
+    row.querySelector(".del").onclick = async (e) => {
+      e.stopPropagation();
+      if (!confirm(`刪除「${c.title}」這段對話？`)) return;
+      await fetch(`/api/conversations/${encodeURIComponent(c.id)}`, { method: "DELETE" });
+      if (c.id === session) { session = newSession(); showWelcome(); }
+      openDrawer();
+    };
+    box.appendChild(row);
+  }
+  $("drawer").classList.add("open");
+}
 
 // linked to the report page (same origin): read its filter bar, show it, and send answers' scope back
 const host = (() => { try { return window.parent !== window && window.parent.getContext ? window.parent : null; } catch (e) { return null; } })();
@@ -222,7 +298,7 @@ function finish(el, ev) {
   el.appendChild(bubble);
   const footer = document.createElement("div");
   footer.className = "footer";
-  footer.innerHTML = `${badge}<span>${ev.tools.length} 次查詢 · ${ev.seconds} 秒${ev.retries ? ` · 重寫 ${ev.retries} 次` : ""}</span>`;
+  footer.innerHTML = `${badge}<span>${ev.when ? timeText(ev.when) + " · " : ""}${ev.tools.length} 次查詢 · ${ev.seconds} 秒${ev.retries ? ` · 重寫 ${ev.retries} 次` : ""}</span>`;
   el.appendChild(footer);
   if (host && ev.focus) {
     const b = document.createElement("button");
@@ -280,19 +356,18 @@ $("input").addEventListener("keydown", (e) => {
 });
 function autosize() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; }
 $("input").addEventListener("input", autosize);
-$("reset").addEventListener("click", async () => {
-  await fetch("/api/reset", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session }) });
-  location.reload();
+$("reset").addEventListener("click", () => {
+  if (busy) return;
+  session = newSession();
+  showWelcome();
 });
+$("historyBtn").addEventListener("click", openDrawer);
+$("closeDrawer").addEventListener("click", () => $("drawer").classList.remove("open"));
 
-fetch("/api/info").then((r) => r.json()).then((info) => {
+fetch("/api/info").then((r) => r.json()).then(async (info) => {
   $("meta").textContent = `資料最新到 ${info.latest} · 模型 ${info.model} · 本機執行`;
-  for (const q of info.examples) {
-    const b = document.createElement("button");
-    b.type = "button"; b.textContent = q;
-    b.onclick = () => ask(q);
-    $("examples").appendChild(b);
-  }
+  examples = info.examples;
+  await loadConversation(session);
 }).catch(() => { $("meta").textContent = "無法連線到後端"; });
 </script>
 </body>

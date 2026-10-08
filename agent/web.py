@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from analysis import tools
 
+from . import history as history_store
 from .host import DEFAULT_MODEL, Agent, Turn
 
 STATIC = Path(__file__).with_name("static")
@@ -65,10 +66,17 @@ async def chat_page():
     return FileResponse(STATIC / "index.html")
 
 
+def latest_date() -> str | None:
+    """Latest loaded business day, read live: the server runs for days while the daily job adds data."""
+    with tools.store.open_db(read_only=True) as db:
+        last = tools.store.last_snapshot_date(db)
+    return str(last) if last else None
+
+
 @app.get("/api/info")
 async def info():
     sep = "&" if "?" in REPORT_URL else "?"
-    return {"model": State.model, "latest": State.agent.latest, "examples": EXAMPLES,
+    return {"model": State.model, "latest": latest_date() or State.agent.latest, "examples": EXAMPLES,
             "metrics": State.agent.metrics, "report_url": REPORT_URL,
             "report_embed_url": f"{REPORT_URL}{sep}rs:embed=true"}
 
@@ -146,10 +154,24 @@ def context_text(ctx: dict | None) -> str | None:
     return "、".join(parts)
 
 
-@app.post("/api/reset")
-async def reset(request: Request):
-    body = await request.json()
-    State.conversations.pop(body.get("session", ""), None)
+@app.get("/api/conversations")
+async def conversations():
+    return history_store.list_conversations()
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def conversation(conversation_id: str):
+    turns = history_store.load_turns(conversation_id)
+    for t in turns:  # the page needs what it showed, not the raw evidence
+        t.pop("evidence", None)
+        t["tools"] = [{"name": c["tool"], "args": c["args"], "result": c.get("result", "")} for c in t["tools"]]
+    return turns
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    history_store.delete_conversation(conversation_id)
+    State.conversations.pop(conversation_id, None)
     return {"ok": True}
 
 
@@ -171,13 +193,18 @@ async def chat(request: Request):
                 await queue.put({"type": "status", "text": "前一個問題還在處理，排隊中…"})
             async with State.lock:
                 await queue.put({"type": "status", "text": "思考中"})
-                history = State.conversations.setdefault(session, [])
+                State.agent.latest = latest_date() or State.agent.latest  # the daily job may have added a day
+                if session not in State.conversations:  # reopened conversation / server restarted
+                    State.conversations[session] = history_store.restore_history(session)
+                history = State.conversations[session]
                 turn = await State.agent.ask(question, history=history, on_event=on_event,
                                              context=context_text(body.get("context")))
                 history.append(turn)
                 del history[:-6]
+                focus = focus_of(turn) if not turn.ungrounded else None
+                history_store.save_turn(session, turn, focus, body.get("context"))
                 await queue.put({"type": "answer", "text": turn.answer, "grounded": not turn.ungrounded,
-                                 "focus": focus_of(turn) if not turn.ungrounded else None,
+                                 "focus": focus, "session": session,
                                  "retries": turn.retries, "seconds": round(turn.seconds, 1),
                                  "tools": [{"name": c["tool"], "args": c["args"], "result": c.get("result", "")}
                                            for c in turn.tool_calls]})

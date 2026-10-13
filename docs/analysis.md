@@ -22,6 +22,7 @@ Oracle ──(依關聯自動產生 SQL)──► store.py ──► DuckDB 每�
 | `python -m analysis report [--date]` | 產生某天的報告 |
 | `python -m analysis daily` | 快照＋昨日報告（每日排程呼叫） |
 | `python -m analysis evaluate [--start --end]` | 用 `scenarios.yaml` 的標準答案評分，輸出 `reports/evaluation.md` |
+| `python -m analysis reconcile [--port]` | 與 Power BI Desktop 本機引擎用 DAX 算出的數字對帳，輸出 `reports/reconcile.md` |
 
 ## 「懂」報表的方式：從模型讀，不寫死
 
@@ -30,6 +31,25 @@ Oracle ──(依關聯自動產生 SQL)──► store.py ──► DuckDB 每�
 - **關聯**：維度欄位一律沿著模型中的多對一關聯 JOIN；`config.yaml` 裡寫了模型不存在的欄位，啟動時就會報錯。
 - **分析重點**：只掃描報表頁面上實際出現的量值（從 PBIR 解析），也就是使用者平常在看的指標。
 - **訂單層級維度**：由資料自動判斷（每張訂單是否只對應一個值）。區域、門市、通路、顧客分群可以計算訂單數；品類、商品不行，因為同一張訂單會包含多個品類。
+
+## 換一份報表：資料集與資料來源
+
+分析的對象由環境變數 `PBI_DATASET` 決定：預設 `retail`（`powerbi/` + `analysis/config.yaml`，資料來自 Oracle）；其他資料集放在 `datasets/<名稱>/`（Power BI 專案、`analysis.yaml`、問答題庫），例如 `datasets/superstore`（見 [excel-dataset.md](excel-dataset.md)）。快照與報告依資料集分開存放。
+
+- **資料來源跟著模型走**：`semantic.py` 讀 Power Query 分割區，`Oracle.Database(...)` 就連 Oracle；`Excel.Workbook(File.Contents(路徑或參數))` 就把工作表載入記憶體中的 DuckDB（`sources.py`）。兩者用同一套 SQL 產生快照。
+- **LEFT JOIN**：對不到維度的事實資料仍計入總數（成員顯示為「(空白)」），和 Power BI 的行為一致。
+- **與 Power BI 對帳**：`python -m analysis reconcile` 連到 Power BI Desktop 背景的本機引擎，用 DAX 重算抽樣的數字逐一比對（零售 4,176 個、Superstore 5,700 個，皆 0 個不一致）。
+
+小量資料需要的設定（零售資料不使用，結果不受影響）：
+
+| 設定 | 作用 |
+|---|---|
+| `thresholds.min_rows` | 本期與比較期間各至少幾筆明細才判斷是否異常；不足時判讀為「樣本太少，無法判斷」 |
+| `roles.signed` | 可能為負或接近 0 的指標（例如利潤）不以變化率判斷 |
+| `windows.<w>.seasonal: total` | 成員的季節校正改用整體去年同期的變化 |
+| `thresholds.pattern_min_z`、`price_index_move` | 量價型態只列至少「偏大」的變化、同品項售價指數超過雜訊才算價格變動 |
+| `default_window` | 沒有單日時間窗時，問「某一天」改用哪個時間窗 |
+| `variants` + `PBI_VARIANT` | 改讀另一份活頁簿（例如沒有埋入事件的原始資料），用來量測背景誤報 |
 
 ## 偵測與取捨規則
 

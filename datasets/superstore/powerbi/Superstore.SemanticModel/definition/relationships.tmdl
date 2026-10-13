@@ -1,0 +1,7 @@
+relationship 81e64f3e-8ac8-5f41-9df4-baae56000104
+	fromColumn: Orders.Region
+	toColumn: People.Region
+
+relationship 1a3d0d4a-61fa-5e7e-929f-898db111c27c
+	fromColumn: Orders.'Order ID'
+	toColumn: Returns.'Order ID'

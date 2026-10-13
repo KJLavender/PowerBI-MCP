@@ -1,0 +1,37 @@
+/// 各地區負責人（Excel 工作表 People）
+table People
+	lineageTag: 2d8f8737-7116-5abb-b52a-3097cfcb2055
+
+	/// 負責人
+	column Person
+		dataType: string
+		lineageTag: ce07043f-7515-5c86-b6c0-c9aac973c623
+		summarizeBy: none
+		sourceColumn: Person
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 地區
+	column Region
+		dataType: string
+		lineageTag: 41885676-1b3b-5d5d-9205-1184152d618f
+		summarizeBy: none
+		sourceColumn: Region
+
+		annotation SummarizationSetBy = Automatic
+
+	partition People = m
+		mode: import
+		source =
+				let
+				    Source = Excel.Workbook(File.Contents(ExcelPath), null, true),
+				    SheetNav = Source{[Item = "People", Kind = "Sheet"]}[Data],
+				    Promoted = Table.PromoteHeaders(SheetNav, [PromoteAllScalars = true]),
+				    Typed = Table.TransformColumnTypes(Promoted, {
+				        {"Person", type text},
+				        {"Region", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table

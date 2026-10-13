@@ -6,3 +6,4 @@ mcp>=2.0
 ollama>=0.6
 fastapi>=0.110
 uvicorn[standard]>=0.29
+openpyxl>=3.1

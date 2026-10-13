@@ -1,0 +1,87 @@
+# Superstore 問答評分題庫。expect：每一組至少要出現其中一個關鍵字（正規表示式）；forbid：不可出現的說法；
+# tools：至少要呼叫其中一個工具。答案依據 scenarios.yaml 的埋入情境（Agent 看不到這個檔案）。
+# 除了關鍵字，每個回答還要通過自動查核（數字、名稱、對應、方向、顯著性、原因、重點）。
+
+- id: tech-price
+  question: 截至 2015-08-31 的近 28 日，Technology 的利潤率為什麼上升？
+  tools: [explain_change]
+  expect: ["價|漲"]
+
+- id: furniture-cost
+  question: 2015 年 9 月 Furniture 的利潤率跟去年同期比，為什麼下降？
+  tools: [explain_change]
+  expect: ["成本"]
+
+- id: latam-promo
+  question: 為什麼 2015-10-11 這週 LATAM 的利潤率掉這麼多？
+  tools: [explain_change]
+  expect: ["折扣"]
+
+- id: corporate-churn
+  question: 以 2015-07-31 為準，Corporate 顧客的訂單數跟去年同期比，是不是在流失？
+  tools: [explain_change, metric_change]
+  expect: ["Corporate", "流失|下降|減少|少"]
+  forbid: ["沒有.{0,4}流失|並未流失"]
+
+# 真實但未達顯著門檻的變化：要如實說「偏大但未達顯著」，不可誇大
+- id: apac-drop
+  question: 截至 2015-07-12 的近 28 日，Asia Pacific 的訂單數跟去年同期比為什麼少這麼多？
+  tools: [explain_change]
+  expect: ["Asia Pacific", "下降|減少|少"]
+
+# 陷阱：刻意小於雜訊的變化 → 要說資料不足以判斷
+- id: subtle-tables
+  question: 2015 年 10 月 Europe 的 Tables 銷售數量為什麼下降？
+  tools: [explain_change, metric_change]
+  expect: ["樣本|資料量|不足|無法判斷|正常波動"]
+
+# 陷阱：問題的方向是錯的（促銷期間訂單其實增加）
+- id: wrong-direction
+  question: 為什麼 2015-10-11 這週 LATAM 的訂單數下降？
+  tools: [explain_change, metric_change]
+  expect: ["上升|增加|成長|增長"]
+
+# 陷阱：沒有異常
+- id: normal-week
+  question: 2015-09-16 的整體銷售額為什麼下降？
+  tools: [explain_change, metric_change]
+  expect: ["正常|不顯著|未達|波動"]
+
+# 陷阱：不存在的成員、超出資料範圍
+- id: no-such-member
+  question: Antarctica 市場的銷售額為什麼下降？
+  tools: [explain_change, list_members, describe_model, metric_change]
+  expect: ["沒有|找不到|不存在|無此|並無|未有|不包含"]
+
+- id: out-of-range
+  question: 2016 年 3 月的銷售額為什麼下降？
+  tools: [explain_change, metric_change, describe_model]
+  expect: ["超出|範圍|沒有.{0,8}資料|只到|截至|2015-12-31"]
+
+# 陷阱：資料無法回答的業務原因
+- id: unknowable
+  question: 2015-10-11 這週 LATAM 利潤率下降，是不是因為競爭對手削價？
+  tools: [explain_change, metric_change]
+  expect: ["無法判斷|無法確認|無法得知|需.{0,4}確認|資料無法"]
+
+# 可能為負的指標：利潤不以變化率判斷，要改看利潤率
+- id: signed-metric
+  question: 為什麼 2015-09-12 這週 Furniture 的利潤下降？
+  tools: [explain_change, metric_change]
+  expect: ["利潤率"]
+
+- id: lineage
+  question: 利潤率是怎麼計算的？資料從哪裡來？
+  tools: [metric_lineage, describe_model]
+  expect: ["利潤", "銷售額", "Excel|Orders"]
+
+# 模型裡有、但分析引擎翻譯不了的量值（CALCULATE）
+- id: untranslatable
+  question: 退貨率是怎麼定義的？
+  tools: [metric_lineage, describe_model]
+  expect: ["退貨訂單數"]
+
+- id: weekly-report
+  question: 2015-10-11 的報告有什麼需要注意的？
+  tools: [daily_report]
+  expect: ["LATAM"]

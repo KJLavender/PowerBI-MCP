@@ -9,6 +9,7 @@ import re
 from contextlib import contextmanager
 from datetime import date, timedelta
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
@@ -20,8 +21,13 @@ WINDOW_HELP = {
     "day": "單日：當日 vs 近 4 週同星期平均",
     "week": "近 7 日 vs 前 7 日（已扣除去年同期的季節性）",
     "month": "近 28 日 vs 前 28 日（已扣除去年同期的季節性）",
-    "year": "近 28 日 vs 去年同期（相對整體同店成長）",
+    "year": "近 28 日 vs 去年同期（相對整體成長）",
 }
+
+
+def window_help() -> dict[str, str]:
+    """Window descriptions for the configured windows (a window may override its text with `help`)."""
+    return {w: spec.get("help", WINDOW_HELP.get(w, spec["label"])) for w, spec in ctx().config["windows"].items()}
 
 
 class ToolError(ValueError):
@@ -98,9 +104,19 @@ def resolve_period(date_str: str | None, window: str) -> tuple[date | None, str,
     d, is_month = parse_period(date_str)
     if not is_month:
         return d, window, None
+    with store.open_db(read_only=True) as db:
+        last = store.last_snapshot_date(db)
+    if last and d.replace(day=1) > last:  # a month after the data ends is not "the latest day"
+        raise ToolError(f"{date_str} 超出資料範圍：資料只到 {last}")
     d = clamp_to_data(d)
     w = window if window in ("month", "year") else "month"
     return d, w, f"「{date_str}」解讀為整個月：使用截至 {d} 的近 28 日（window={w}）"
+
+
+def order_dim_labels() -> str:
+    with store.open_db(read_only=True) as db:
+        dims = store.order_dims(db)
+    return "、".join(ctx().dims[k].label for k in dims)
 
 
 @lru_cache(maxsize=1)
@@ -120,11 +136,14 @@ def metric_name(name: str) -> str:
     if name in c.formulas:
         return name
     close = [m for m in c.formulas if m in name or name in m]
+    if name in c.model.measures:
+        raise ToolError(f"模型中有量值「{name}」（DAX：{c.model.measures[name].expression}），但分析引擎無法翻譯它"
+                        f"（{c.skipped.get(name, '不在事實資料表上')}），所以無法計算變化；可用 metric_lineage 查看定義")
     msg = f"沒有指標「{name}」。可用指標：{'、'.join(c.formulas)}"
     members = [(m, dim) for m, dim in member_index().items() if m in name]
     if members:
         m, dim = max(members, key=lambda x: len(x[0]))
-        metric = max(close, key=len) if close else "銷售額"
+        metric = max(close, key=len) if close else c.roles["sales"]
         msg += (f"。注意：「{m}」是維度「{dim}」的成員，不是指標；"
                 f"請改用 metric=\"{metric}\"、filters={{\"{dim}\": \"{m}\"}}")
     elif close:
@@ -134,8 +153,18 @@ def metric_name(name: str) -> str:
 
 def window_name(w: str) -> str:
     if w not in ctx().config["windows"]:
-        raise ToolError(f"window 需為 {'、'.join(ctx().config['windows'])} 其中之一（{WINDOW_HELP}）")
+        raise ToolError(f"window 需為 {'、'.join(ctx().config['windows'])} 其中之一（{window_help()}）")
     return w
+
+
+def default_window(w: str, note: str | None) -> tuple[str, str | None]:
+    """Datasets too small for single-day comparisons have no "day" window: use the configured default."""
+    windows = ctx().config["windows"]
+    if w == "day" and "day" not in windows:
+        d = ctx().config.get("default_window", next(iter(windows)))
+        msg = f"這份資料每天的交易量太少，單日比較不可靠，改用「{windows[d]['label']}」（window={d}）"
+        return d, f"{note}；{msg}" if note else msg
+    return w, note
 
 
 def resolve_scope(e: Engine, filters: dict | None) -> dict[str, str]:
@@ -177,12 +206,14 @@ def period_text(e: Engine, d: date, window: str) -> dict:
     else:
         lag = YEAR if mode == "yoy" else days
         base = f"{d - timedelta(days=lag + days - 1)} ～ {d - timedelta(days=lag)}"
-    return {"本期": cur, "比較基準": base, "說明": WINDOW_HELP.get(window, w["label"])}
+    return {"本期": cur, "比較基準": base, "說明": window_help().get(window, w["label"])}
 
 
 def reading(e: Engine, s: Stat, scope: dict) -> str:
     """Three-level reading instead of a bare yes/no."""
     th = e.z_threshold(scope)
+    if s.note.startswith("樣本太少"):
+        return f"{s.note}，無法判斷是否異常"
     if s.significant:
         return "顯著異常"
     if abs(s.z) >= 2:
@@ -192,13 +223,32 @@ def reading(e: Engine, s: Stat, scope: dict) -> str:
 
 def stat_dict(e: Engine, s: Stat, member: bool = True) -> dict:
     c = ctx()
-    exp_label = "整體同店同期變化" if e.windows[s.window].get("mode") == "yoy" else "去年同期間的變化"
+    exp_label = e.expected_label(s.window, member)
     out = {"指標": s.metric, "本期": c.fmt(s.metric, s.current), "比較基準": c.fmt(s.metric, s.baseline),
            "變化": pct(s.kind, s.change), "z": round(s.z, 1), "顯著": bool(s.significant)}
     if s.expected is not None:
         out[exp_label] = pct(s.kind, s.expected)
     out["display"] = (f"{s.metric} {pct(s.kind, s.change)}（本期 {out['本期']}，比較基準 {out['比較基準']}"
                       + (f"，{exp_label} {out[exp_label]}" if s.expected is not None else "") + "）")
+    return out
+
+
+def fact(scope: dict, metric: str, change: float, kind: str, significant: bool | None, verdict: str = "") -> dict:
+    """Machine-readable claim for the answer checker (removed before the result reaches the model):
+    which scope/metric moved which way, and whether a tool judged it significant (None = not judged)."""
+    dims = ctx().dims
+    return {"scope": {dims[k].label: v for k, v in scope.items()}, "metric": metric,
+            "change": None if change is None or change != change else round(float(change), 6), "kind": kind,
+            "significant": significant, "verdict": verdict}
+
+
+def stat_fact(e: Engine, scope: dict, s: Stat) -> dict:
+    # too small a sample is not significant either: "顯著" about it is wrong, "無法判斷" is right
+    out = fact(scope, s.metric, s.change, s.kind, bool(s.significant), reading(e, s, scope))
+    if s.expected is not None:  # the change the verdict is based on: vs last year's change / vs the total
+        adj = s.change - s.expected if s.kind == "abs" else (1 + s.change) / (1 + s.expected) - 1
+        out["adjusted"] = round(float(adj), 6)
+    out["window"] = s.window
     return out
 
 
@@ -241,7 +291,10 @@ def describe_model() -> dict:
         "指標": e_metrics,
         "維度": {d.label: {"key": k, "欄位": f"{d.table}[{d.column}]", "上層": c.dims[d.parent].label if d.parent else None,
                          "關聯": [str(r) for r in d.path]} for k, d in c.dims.items()},
-        "時間窗": WINDOW_HELP,
+        "時間窗": window_help(),
+        "無法分析的量值": {m: {"說明": c.model.measures[m].description, "DAX": c.model.measures[m].expression,
+                         "原因": f"分析引擎無法翻譯這個 DAX（{why}），可用 metric_lineage 查看定義，但無法計算變化"}
+                     for m, why in c.skipped.items()},
     }
 
 
@@ -269,13 +322,22 @@ def daily_report(date_str: str | None = None) -> dict:
             findings = raw["findings"]
             return {"日期": str(d), "資料品質": [x["message"] for x in raw["data_quality"]] or ["正常"],
                     "關鍵指標": [{"指標": k["metric"], "當日": ctx().fmt(k["metric"], k["value"]),
-                              "vs上週同日": pct(k["kind"], k["vs_last_week"]),
-                              "近7日vs前7日": pct(k["kind"], k["week_vs_prev"])} for k in raw["kpis"]],
-                    "發現": [_finding_from_json(f) for f in findings]}
+                              "vs上週同日": pct(k["kind"], None if signed(k["metric"]) else k["vs_last_week"]),
+                              "近7日vs前7日": pct(k["kind"], None if signed(k["metric"]) else k["week_vs_prev"])}
+                             for k in raw["kpis"]],
+                    "發現": [_finding_from_json(f) for f in findings],
+                    "_facts": [fact(f["scope"], st["metric"], st["change"], st["kind"], True, "顯著異常")
+                               for f in findings for st in f["stats"] if st["significant"]]}
         from . import report  # generate on the fly when the daily job hasn't produced it
         result = report.run(ctx(), d, e)
         return {"日期": str(d), "資料品質": [x["message"] for x in result["data_quality"]] or ["正常"],
-                "發現": [finding_dict(e, f) for f in result["findings"]]}
+                "發現": [finding_dict(e, f) for f in result["findings"]],
+                "_facts": [stat_fact(e, f.scope, st) for f in result["findings"] for st in f.significant]}
+
+
+def signed(metric: str) -> bool:
+    """Metrics that can be negative (roles.signed): their % change is not shown."""
+    return metric in ctx().roles.get("signed", [])
 
 
 def _finding_from_json(f: dict) -> dict:
@@ -298,30 +360,44 @@ def metric_change(metric: str | None = None, filters: dict | None = None, date_s
                   window: str = "day") -> dict:
     """Value and change of one metric (or all report metrics) for a scope, date and window."""
     d, window, note = resolve_period(date_str, window)
+    window, note = default_window(window, note)
     window = window_name(window)
     with engine_at(d) as (e, d):
         scope = resolve_scope(e, filters)
         bases = scope_bases(e, scope)
         metrics = [metric_name(metric)] if metric else e.metrics
-        stats = []
+        stats, facts = [], []
         for m in metrics:
             if not e.allowed(m, tuple(scope)):
-                stats.append({"指標": m, "說明": "此指標在這個範圍無法計算（訂單數類指標不能依品類/商品切分）"})
+                stats.append({"指標": m, "說明": f"此指標在這個範圍無法計算（只能依 {order_dim_labels()} 切分）"})
                 continue
             s = e.stat(bases, m, window, e.z_threshold(scope), member=bool(scope))
-            stats.append({**stat_dict(e, s), "判讀": reading(e, s, scope)} if s
-                         else {"指標": m, "說明": "歷史資料不足，無法比較"})
+            if s:
+                stats.append({**stat_dict(e, s), "判讀": reading(e, s, scope)})
+                facts.append(stat_fact(e, scope, s))
+            else:
+                stats.append({"指標": m, "說明": untestable(e, bases, m, window)})
         out = {"範圍": e.label(scope), "日期": str(d), "期間": period_text(e, d, window), "結果": stats,
                "顯著的定義": f"z 值絕對值 ≥ {e.z_threshold(scope)} 且變動夠大"}
         if note:
             out["日期解讀"] = note
+        out["_facts"] = facts
         return out
+
+
+def untestable(e: Engine, bases: dict, metric: str, window: str) -> str:
+    if e.signed(bases, metric, window):
+        margin = ctx().roles.get("margin_rate")
+        return (f"{metric} 可能為負或接近 0，變化率沒有意義，不判斷是否異常"
+                + (f"；請改看 {margin}" if margin in ctx().formulas else ""))
+    return "歷史資料不足，無法比較"
 
 
 def explain_change(metric: str, filters: dict | None = None, date_str: str | None = None,
                    window: str = "day") -> dict:
     """Why did a metric change for a scope? Evidence from the data along the model's relationships."""
     d, window, note = resolve_period(date_str, window)
+    window, note = default_window(window, note)
     window = window_name(window)
     metric = metric_name(metric)
     c = ctx()
@@ -329,23 +405,31 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
         scope = resolve_scope(e, filters)
         bases = scope_bases(e, scope)
         if not e.allowed(metric, tuple(scope)):
-            raise ToolError(f"{metric} 不能依 {e.label(scope)} 切分（訂單數類指標只能依區域、門市、通路、顧客分群）")
+            raise ToolError(f"{metric} 不能依 {e.label(scope)} 切分（{metric} 只能依 {order_dim_labels()} 切分）")
         s = e.stat(bases, metric, window, e.z_threshold(scope), member=bool(scope))
         if s is None:
-            raise ToolError("歷史資料不足，無法比較")
+            raise ToolError(untestable(e, bases, metric, window))
         out = {"問題": f"{e.label(scope)} 的 {metric}（{e.windows[window]['label']}，{d}）",
                "期間": period_text(e, d, window), "變化": stat_dict(e, s), "判讀": reading(e, s, scope)}
         if note:
             out["日期解讀"] = note
+        facts = [stat_fact(e, scope, s)]
 
         # 1) same scope, other metrics → volume / price / discount / cost pattern
         others = []
-        for m in list(e.metrics) + [x for x in ("成本", "毛利", "折扣金額") if x in c.formulas]:
+        # for a ratio question, amounts (cost, profit…) mostly follow volume and read like causes: leave them out
+        ratio_q = c.formulas[metric].is_ratio
+        extra = [] if ratio_q else c.roles.get("extra", [])
+        volume = {c.roles["sales"], c.roles["volume"], c.roles["orders"]}
+        for m in list(e.metrics) + [x for x in extra if x in c.formulas and x not in e.metrics]:
             if m == metric or not e.allowed(m, tuple(scope)):
+                continue
+            if ratio_q and not c.formulas[m].is_ratio and m not in volume:
                 continue
             st = e.stat(bases, m, window, e.z_threshold(scope), member=bool(scope))
             if st:
                 others.append(stat_dict(e, st)["display"])
+                facts.append(stat_fact(e, scope, st))
         out["同範圍其他指標"] = others
         pattern = volume_price_reading(e, bases, scope, window)
         if pattern:
@@ -363,10 +447,12 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
             out["模型拆解"] = ident
 
         # 3) breakdown by every other dimension (contribution / rate-mix)
-        out["依維度拆解"] = breakdown(e, scope, metric, window, s)
+        out["依維度拆解"] = breakdown(e, scope, metric, window, s, facts=facts)
 
         # 3b) one level deeper: test the biggest contributors as scopes of their own
-        out["深入一層"] = drill_down(e, scope, metric, window)
+        drilled = []
+        out["深入一層"] = drill_down(e, scope, metric, window, found=drilled)
+        facts += [stat_fact(e, sub, st) for sub, st in drilled]
 
         # 4) is it specific to this scope or part of something broader?
         out["範圍判斷"] = broader_context(e, scope, metric, window, s)
@@ -374,23 +460,71 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
         # 5) context: data quality, calendar, new stores
         notes = []
         for issue in e.data_quality(d):
-            if issue.get("unit") and scope.get(c.config["data_quality"]["unit"], issue["unit"]) == issue["unit"]:
+            if issue.get("unit") and scope.get(c.dq.get("unit"), issue["unit"]) == issue["unit"]:
                 notes.append(f"資料品質：{issue['message']}")
             elif not issue.get("unit"):
                 notes.append(f"資料品質：{issue['message']}")
         f = Finding(scope, window, [s], 1.0)
         e.annotate(f, d, [])
         notes += [n for n in f.notes if n not in notes]
-        out["脈絡"] = notes or ["無節日、新店或資料品質問題"]
+        out["脈絡"] = notes or ["無節日、新店或資料品質問題" if c.dq else "無節日或新單位等特殊脈絡"]
+        out["重點"], key = key_point(e, scope, metric, s, drilled, out)
+        out["_facts"] = facts
+        out["_key"] = key
         return out
+
+
+def key_point(e: Engine, scope: dict, metric: str, s: Stat, drilled: list, out: dict) -> tuple[str, list[str]]:
+    """Deterministic one-line reading the answer's conclusion should follow, and the members it must name."""
+    c = ctx()
+    verdict = reading(e, s, scope)
+    way = "上升" if s.change > 0 else "下降" if s.change < 0 else "持平"
+    ref = f"（{e.expected_label(s.window, bool(scope))} {pct(s.kind, s.expected)}）" if s.expected is not None else ""
+    head = f"{e.label(scope)} 的 {metric}{way} {pct(s.kind, s.change)}{ref}，{verdict.split('，')[0]}"
+    parts, key = [head], []
+    sig = [(sub, st) for sub, st in drilled if st.significant and np.sign(st.change) == np.sign(s.change)]
+    if sig:
+        sub, st = sig[0]
+        # a sub-scope explains the change only if it stands out; moving like the whole scope means a broad effect
+        if not s.significant or abs(st.change) >= 1.5 * abs(s.change):
+            parts.append(f"顯著異常的部分：{e.label(sub)}（{metric} {pct(st.kind, st.change)}）")
+            key = [v for k, v in sub.items() if k not in scope]
+        else:
+            parts.append(f"各部分普遍同向變化（例如 {e.label(sub)} {pct(st.kind, st.change)}），不是集中在單一部分")
+    elif out.get("依維度拆解"):
+        top = out["依維度拆解"][0]
+        if top["集中度"] >= 0.5 and top["變動最大的成員"] and abs(s.z) >= 2:
+            member = top["變動最大的成員"][0].split("：")[0]
+            dim = next(k for k, d in c.dims.items() if d.label == top["維度"])
+            sub = e.bases_of({**scope, dim: member})
+            whole = e.bases_of(scope) if scope else e.cube(()).column(())
+            # its weight in the comparison period: a member holding half of the scope naturally carries
+            # half of a broad change, which is not a concentration
+            weight = e.sample_size(sub, s.window)[1] / max(e.sample_size(whole, s.window)[1], 1) if sub else 1.0
+            if top["集中度"] >= 1.5 * weight:
+                parts.append(f"變化集中在{top['維度']}「{member}」（佔變動 {top['集中度']:.0%}，"
+                             f"比較期間只佔明細 {weight:.0%}）")
+    if any(n.startswith("資料品質") for n in out.get("脈絡", [])):
+        parts.append("注意：可能是資料缺漏，而非實際營運變化")
+    reading_lines = out.get("量價判讀") or []
+    r = c.roles
+    if metric in (r["margin_rate"], r["discount_rate"], r["unit_price"]):
+        # margin / price questions: the sentence that names the mechanism (price, discount, cost)
+        parts += [x for x in reading_lines[1:] if metric in x or "售價" in x][:1] or reading_lines[:1]
+    else:
+        # volume / sales questions: the volume-price pattern, not the margin story
+        parts += [x for x in reading_lines if x.startswith("型態") or "銷量" in x][:2]
+    return "；".join(parts), key
 
 
 def volume_price_reading(e: Engine, bases: dict, scope: dict, window: str) -> list[str]:
     """Deterministic reading of volume / price / discount / margin moves for the scope, so a small model
     doesn't have to infer them (e.g. 'price flat but margin down → unit cost went up')."""
     th = e.th
+    r = ctx().roles
+    vol_m, ord_m, price_m, disc_m, margin_m = r["volume"], r["orders"], r["unit_price"], r["discount_rate"], r["margin_rate"]
     st = {}
-    for m in ("銷售數量", "訂單數", "平均成交單價", "折扣率", "毛利率"):
+    for m in (vol_m, ord_m, price_m, disc_m, margin_m):
         if m in ctx().formulas and e.allowed(m, tuple(scope)):
             s = e.stat(bases, m, window, member=bool(scope))
             if s:
@@ -401,48 +535,52 @@ def volume_price_reading(e: Engine, bases: dict, scope: dict, window: str) -> li
             return 0
         s = st[m]
         limit = th["min_ratio_change"] if s.kind == "abs" else th["min_change_pct"]
-        return 0 if abs(s.change) < limit else (1 if s.change > 0 else -1)
+        # on noisy data a move only counts when it is at least unusual for this scope (pattern_min_z)
+        if abs(s.change) < limit or abs(s.z) < th.get("pattern_min_z", 0):
+            return 0
+        return 1 if s.change > 0 else -1
 
     def show(m: str) -> str:
         return f"{m} {pct(st[m].kind, st[m].change)}"
 
     out = []
-    vol = "銷售數量" if "銷售數量" in st else "訂單數"
+    vol = vol_m if vol_m in st else ord_m
     tags = []
     if moved(vol):
         tags.append(("量增" if moved(vol) > 0 else "量減") + f"（{show(vol)}）")
     index = like_for_like_price(e, scope, window)
     price_move = 0
-    if index is not None and abs(index) >= 0.02:
+    if index is not None and abs(index) >= th.get("price_index_move", 0.02):
         price_move = 1 if index > 0 else -1
         tags.append(("價升" if index > 0 else "價降") + f"（同品項售價 {index:+.1%}，已排除商品組合影響）")
-    elif index is None and moved("平均成交單價"):
-        price_move = moved("平均成交單價")
-        tags.append(("價升" if price_move > 0 else "價降") + f"（{show('平均成交單價')}）")
-    if moved("折扣率"):
-        tags.append(("折扣加深" if moved("折扣率") > 0 else "折扣減少") + f"（{show('折扣率')}）")
-    if moved("毛利率"):
-        tags.append(("毛利率上升" if moved("毛利率") > 0 else "毛利率下降") + f"（{show('毛利率')}）")
+    elif index is None and moved(price_m):
+        price_move = moved(price_m)
+        tags.append(("價升" if price_move > 0 else "價降") + f"（{show(price_m)}）")
+    if moved(disc_m):
+        tags.append(("折扣加深" if moved(disc_m) > 0 else "折扣減少") + f"（{show(disc_m)}）")
+    if moved(margin_m):
+        tags.append((f"{margin_m}上升" if moved(margin_m) > 0 else f"{margin_m}下降") + f"（{show(margin_m)}）")
     if tags:
         out.append("型態：" + "、".join(tags))
-    margin, price, disc = moved("毛利率"), price_move, moved("折扣率")
+    margin, price, disc = moved(margin_m), price_move, moved(disc_m)
     if margin > 0 and price > 0:
-        out.append("毛利率上升時售價也上升：主要來自價格調整（漲價）")
+        out.append(f"{margin_m}上升時售價也上升：主要來自價格調整（漲價）")
     elif margin < 0 and disc > 0:
-        out.append("毛利率下降時折扣加深：主要來自折扣／促銷")
+        out.append(f"{margin_m}下降時折扣加深：主要來自折扣／促銷")
     elif margin < 0 and price <= 0 and disc <= 0:
-        out.append("售價與折扣沒有同步變化，但毛利率下降：代表單位成本上升（或低毛利商品占比提高）")
+        out.append(f"售價與折扣沒有同步變化，但{margin_m}下降：代表單位成本上升（或低{margin_m}商品占比提高）")
     elif margin > 0 and price <= 0 and disc >= 0:
-        out.append("售價沒有上升，但毛利率上升：代表單位成本下降（或高毛利商品占比提高）")
+        out.append(f"售價沒有上升，但{margin_m}上升：代表單位成本下降（或高{margin_m}商品占比提高）")
     if moved(vol) < 0 and price > 0:
         out.append("售價上升同時銷量下降：可能是漲價影響買氣（資料只能顯示同時發生，無法證明因果）")
     return out
 
 
-def like_for_like_price(e: Engine, scope: dict, window: str, item_dim: str = "product") -> float | None:
+def like_for_like_price(e: Engine, scope: dict, window: str) -> float | None:
     """Laspeyres price index for the scope: Σ p1·q0 / Σ p0·q0 − 1 over the items (products) sold in both
     periods. Unlike the average price, it is not moved by a shift in product mix."""
-    f = ctx().formulas.get("平均成交單價")
+    item_dim = ctx().config.get("price_item", "product")
+    f = ctx().formulas.get(ctx().roles["unit_price"])
     if item_dim not in ctx().dims or not f or not f.numerator or not f.denominator or item_dim in scope:
         return None
     cube = e.cube(tuple(scope) + (item_dim,))
@@ -463,13 +601,14 @@ def like_for_like_price(e: Engine, scope: dict, window: str, item_dim: str = "pr
     return float((p1 * q0).sum() / (p0 * q0).sum() - 1)
 
 
-def breakdown(e: Engine, scope: dict, metric: str, window: str, s: Stat, top: int = 4) -> list[dict]:
+def breakdown(e: Engine, scope: dict, metric: str, window: str, s: Stat, top: int = 4,
+              facts: list | None = None) -> list[dict]:
     c = ctx()
     formula = c.formulas[metric]
     days, mode = e.windows[window]["days"], e.windows[window].get("mode", "pop")
     rows = []
     for k, dim in c.dims.items():
-        if k in scope or not e.allowed(metric, tuple(scope) + (k,)):
+        if k in scope or not dim.scan or not e.allowed(metric, tuple(scope) + (k,)):
             continue
         cube = e.cube(tuple(scope) + (k,))
         values = tuple(scope.values())
@@ -487,6 +626,9 @@ def breakdown(e: Engine, scope: dict, metric: str, window: str, s: Stat, top: in
             order = np.argsort(-np.abs(delta))[:top]
             items = [f"{names[i]}：{c.fmt(metric, cv[i])}（基準 {c.fmt(metric, bv[i])}，變動 {delta[i]:+,.0f}"
                      + (f"，佔總變動 {delta[i] / total:.0%}" if total else "") + "）" for i in order]
+            if facts is not None:
+                facts += [fact({**scope, k: names[i]}, metric, cv[i] / bv[i] - 1 if bv[i] > 0 else None, "pct", None)
+                          for i in order]
             rows.append({"維度": dim.label, "集中度": round(float(abs(delta[order[0]]) / spread), 2) if spread else 0,
                          "變動最大的成員": items})
         elif formula.numerator and formula.denominator:
@@ -502,6 +644,11 @@ def breakdown(e: Engine, scope: dict, metric: str, window: str, s: Stat, top: in
             order = np.argsort(-(np.abs(rate) + np.abs(mix)))[:top]
             items = [f"{names[i]}：{c.fmt(metric, r1[i])}（基準 {c.fmt(metric, r0[i])}，本身變化貢獻 {unit(rate[i])}，"
                      f"比重變化貢獻 {unit(mix[i])}）" for i in order]
+            if facts is not None:
+                kind = e.kind(metric)
+                facts += [fact({**scope, k: names[i]}, metric,
+                               (r1[i] - r0[i]) if kind == "abs" else (r1[i] / r0[i] - 1 if r0[i] else None), kind, None)
+                          for i in order]
             spread = np.abs(rate).sum() + np.abs(mix).sum()
             rows.append({"維度": dim.label,
                          "集中度": round(float((abs(rate[order[0]]) + abs(mix[order[0]])) / spread), 2) if spread else 0,
@@ -511,12 +658,12 @@ def breakdown(e: Engine, scope: dict, metric: str, window: str, s: Stat, top: in
     return rows
 
 
-def drill_down(e: Engine, scope: dict, metric: str, window: str, top: int = 5) -> list[str]:
+def drill_down(e: Engine, scope: dict, metric: str, window: str, top: int = 5, found: list | None = None) -> list[str]:
     """Sub-scopes (scope + one more dimension member), most anomalous first."""
     c = ctx()
     cands = []
     for k, dim in c.dims.items():
-        if k in scope or not e.allowed(metric, tuple(scope) + (k,)):
+        if k in scope or not dim.scan or not e.allowed(metric, tuple(scope) + (k,)):
             continue
         cube = e.cube(tuple(scope) + (k,))
         values = tuple(scope.values())
@@ -533,8 +680,11 @@ def drill_down(e: Engine, scope: dict, metric: str, window: str, top: int = 5) -
     cands.sort(key=lambda x: -x[0])
     out = []
     for _, sub, st in cands[:top]:
-        flag = "顯著異常" if st.significant else ("偏大" if abs(st.z) >= 2 else "正常")
+        flag = ("樣本太少" if st.note.startswith("樣本太少") else "顯著異常" if st.significant
+                else "偏大" if abs(st.z) >= 2 else "正常")
         out.append(f"{e.label(sub)}：{stat_dict(e, st)['display']}，z {st.z:+.1f}，{flag}")
+        if found is not None:
+            found.append((sub, st))
     return out
 
 
@@ -602,9 +752,16 @@ def data_quality(date_str: str | None = None) -> dict:
     d = parse_date(date_str)
     with engine_at(d) as (e, d):
         issues = e.data_quality(d)
-        etl = e.db.execute("SELECT etl_rows, etl_status FROM etl_log WHERE business_date = ?", [d]).fetchone()
-        return {"日期": str(d), "ETL": {"狀態": etl[1], "回報筆數": f"{int(etl[0]):,}"} if etl else "無紀錄",
-                "問題": [i["message"] for i in issues] or ["未發現問題"]}
+        out = {"日期": str(d)}
+        if ctx().dq.get("etl_table"):
+            etl = e.db.execute("SELECT etl_rows, etl_status FROM etl_log WHERE business_date = ?", [d]).fetchone()
+            out["ETL"] = {"狀態": etl[1], "回報筆數": f"{int(etl[0]):,}"} if etl else "無紀錄"
+        else:
+            rows = e.db.execute("SELECT fact_rows FROM snapshot_log WHERE business_date = ?", [d]).fetchone()
+            out["明細筆數"] = f"{int(rows[0]):,}" if rows else "無資料"
+            out["ETL"] = "資料來源沒有載入紀錄可比對（例如 Excel），只能檢查明細筆數"
+        out["問題"] = [i["message"] for i in issues] or ["未發現問題"]
+        return out
 
 
 def metric_lineage(metric: str) -> dict:
@@ -618,6 +775,13 @@ def metric_lineage(metric: str) -> dict:
     cols = sorted({b.sql for b in c.bases.values() if f and b.name in f.bases})
     return {"量值": metric, "所在資料表": meas.table, "說明": meas.description, "DAX": meas.expression,
             "格式": meas.format_string, "引用的量值": f.refs if f else [],
-            "實際計算": cols, "來源資料表": f"{fact.source_table}（Oracle）",
+            "實際計算": cols, "來源資料表": source_text(fact),
             "報表中使用的位置": [f"{u.page} / {u.title or u.visual}" for u in c.model.usage if metric in u.measures]
             or ["報表未直接使用"]}
+
+
+def source_text(table) -> str:
+    src = table.source or {"kind": "oracle"}
+    if src["kind"] == "excel":
+        return f"{table.source_table}（Excel 工作表，檔案 {Path(src['file'].replace(chr(92), '/')).name}）"
+    return f"{table.source_table}（Oracle）"

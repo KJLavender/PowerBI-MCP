@@ -2,7 +2,10 @@
 
   python -m agent ask "為什麼 9/17 北區的銷售額下降？" [-v] [--model qwen3.5:4b]
   python -m agent chat [-v]
-  python -m agent evaluate [--model ...]       questions in agent/questions.yaml
+  python -m agent evaluate [--model ...]       questions in agent/questions.yaml (or datasets/<name>/questions.yaml)
+  python -m agent mutation-test                break passing answers on purpose: does the checker catch it?
+
+The report is chosen with PBI_DATASET (default: retail).
 """
 import argparse
 import asyncio
@@ -32,6 +35,11 @@ async def chat(args) -> None:
             show(await agent.ask(q))
 
 
+async def mutation_test(args) -> None:
+    from .mutation import main as run
+    run()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="agent", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--model", default=DEFAULT_MODEL)
@@ -45,6 +53,7 @@ def main() -> None:
     s = sub.add_parser("evaluate")
     s.add_argument("--only", help="只跑某個題目 id")
     s.set_defaults(func=lambda a: __import__("agent.evaluate", fromlist=["run"]).run(a))
+    sub.add_parser("mutation-test").set_defaults(func=mutation_test)
     args = p.parse_args()
     asyncio.run(args.func(args))
 

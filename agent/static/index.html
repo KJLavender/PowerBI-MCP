@@ -39,6 +39,8 @@
   .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border-radius: 6px; padding: 3px 8px; }
   .badge.ok { background: var(--ok-soft); color: var(--ok); }
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  details.checks { font-size: 12px; color: var(--muted, #666); margin-top: 4px; }
+  details.checks ul { margin: 4px 0 0 18px; padding: 0; }
   .footer { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
   details { font-size: 13px; }
   details summary { cursor: pointer; color: var(--muted); }
@@ -117,7 +119,7 @@
   <div class="thread" id="thread">
     <div class="welcome" id="welcome">
       <h2>問問報表為什麼變了</h2>
-      <div>所有數字都由程式依 Power BI 模型計算，回答會自動查核；資料不會離開這台電腦。</div>
+      <div>所有數字都由程式依 Power BI 模型計算；每個回答都會逐項查核（日期、範圍、數字、名稱、對應、方向、顯著性、原因、重點）；資料不會離開這台電腦。</div>
       <div class="examples" id="examples"></div>
     </div>
   </div>
@@ -167,7 +169,7 @@ async function loadConversation(id) {
   $("thread").innerHTML = "";
   for (const t of turns) {
     addUser(t.question);
-    finish(addBot(), { text: t.answer, grounded: t.grounded, retries: t.retries, seconds: t.seconds,
+    finish(addBot(), { text: t.answer, grounded: t.grounded, retries: t.retries, seconds: t.seconds, check: t.check,
                        tools: t.tools, focus: t.focus, when: t.created_at });
   }
   scrollDown();
@@ -285,8 +287,13 @@ function describeTool(ev) {
 function finish(el, ev) {
   el.querySelectorAll(".active").forEach((s) => s.classList.remove("active"));
   const badge = ev.grounded
-    ? `<span class="badge ok">✓ 數字已查核，皆來自工具結果</span>`
-    : `<span class="badge warn">⚠ 有無法查證的內容，請看回答末尾說明</span>`;
+    ? `<span class="badge ok">✓ 已通過自動查核</span>`
+    : `<span class="badge warn">⚠ 查核未通過，已改為說明原因</span>`;
+  // per-check result: what was compared against the tool results, and what failed
+  const checks = Object.entries(ev.check || {}).filter(([, v]) => v.checked || v.issues.length);
+  const checkHtml = checks.length ? `<details class="checks"><summary>查核明細（${checks.map(([k, v]) =>
+      `${k} ${v.checked}${v.issues.length ? " ✗" : " ✓"}`).join("・")}）</summary><ul>${checks.map(([k, v]) =>
+      `<li><b>${k}</b>：比對 ${v.checked} 處${v.issues.length ? "，問題：" + v.issues.map(escapeHtml).join("；") : "，全部一致"}</li>`).join("")}</ul></details>` : "";
   const tools = ev.tools.map((t) => {
     let pretty = t.result;
     try { pretty = JSON.stringify(JSON.parse(t.result), null, 2); } catch (e) {}
@@ -300,6 +307,7 @@ function finish(el, ev) {
   footer.className = "footer";
   footer.innerHTML = `${badge}<span>${ev.when ? timeText(ev.when) + " · " : ""}${ev.tools.length} 次查詢 · ${ev.seconds} 秒${ev.retries ? ` · 重寫 ${ev.retries} 次` : ""}</span>`;
   el.appendChild(footer);
+  if (checkHtml) el.insertAdjacentHTML("beforeend", checkHtml);
   if (host && ev.focus) {
     const b = document.createElement("button");
     b.type = "button"; b.className = "focus";

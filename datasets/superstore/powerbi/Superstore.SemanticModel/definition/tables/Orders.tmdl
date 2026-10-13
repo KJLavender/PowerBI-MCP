@@ -1,0 +1,371 @@
+/// 訂單明細（Excel 工作表 Orders，一列 = 一筆訂單中的一項商品）
+table Orders
+	lineageTag: b185d39c-df13-5f93-bb8f-c27f13ed1ba4
+
+	/// 折扣後銷售額
+	measure '銷售額' = SUM ( Orders[Sales] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: c7ecd55d-6ec7-5210-a789-941808b05f31
+
+	/// 利潤
+	measure '利潤' = SUM ( Orders[Profit] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 4447b302-6545-5014-8718-fe0f101b11e0
+
+	/// 利潤 ÷ 銷售額
+	measure '利潤率' = DIVIDE ( [利潤], [銷售額] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 基本指標
+		lineageTag: 6e5030b5-2ce7-5742-87ef-d6f9b7fecdb3
+
+	/// 銷售額 − 利潤（含運費等所有成本）
+	measure '成本' = [銷售額] - [利潤]
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 166a8dc7-678f-58e1-98e6-96c372aaffd0
+
+	/// 商品件數
+	measure '銷售數量' = SUM ( Orders[Quantity] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: c8fad5ce-88ff-5d79-937d-12267159abfd
+
+	/// 不重複訂單數
+	measure '訂單數' = DISTINCTCOUNT ( Orders[Order ID] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 6100aa05-c250-5a5c-ac87-ed0c9a78288c
+
+	/// 平均每筆訂單銷售額 = 銷售額 ÷ 訂單數
+	measure '客單價' = DIVIDE ( [銷售額], [訂單數] )
+		formatString: #,##0.0
+		displayFolder: 基本指標
+		lineageTag: b65b8cca-1fb0-564e-aa62-935a28377057
+
+	/// 依折扣率還原的原價金額
+	measure '折扣前金額' = SUMX ( Orders, Orders[Sales] / ( 1 - Orders[Discount] ) )
+		formatString: #,##0
+		displayFolder: 折扣
+		lineageTag: a440c6a3-d063-5e3c-9cc4-cd378f288c5c
+
+	/// 折扣前金額 − 銷售額
+	measure '折扣金額' = [折扣前金額] - [銷售額]
+		formatString: #,##0
+		displayFolder: 折扣
+		lineageTag: 265c3a2f-cd35-5bcf-b6a5-13e3fd9bf9cd
+
+	/// 折扣金額 ÷ 折扣前金額
+	measure '折扣率' = DIVIDE ( [折扣金額], [折扣前金額] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 折扣
+		lineageTag: 11056e9f-d3fc-5af3-931f-e36049e738f2
+
+	/// 折扣前平均每件售價
+	measure '平均標價' = DIVIDE ( [折扣前金額], [銷售數量] )
+		formatString: #,##0.0
+		displayFolder: 基本指標
+		lineageTag: 37d0affb-fc01-5332-88d0-c2d3c465a3ed
+
+	/// 運費
+	measure '運費' = SUM ( Orders[Shipping Cost] )
+		formatString: #,##0
+		displayFolder: 基本指標
+		lineageTag: 1436ce11-af03-5907-b020-18bddeb61187
+
+	/// 有退貨紀錄的訂單數
+	measure '退貨訂單數' = CALCULATE ( [訂單數], Returns[Returned] = "Yes" )
+		formatString: #,##0
+		displayFolder: 退貨
+		lineageTag: 3232533f-9c97-591b-aad5-e121f5f4bd95
+
+	/// 退貨訂單數 ÷ 訂單數
+	measure '退貨率' = DIVIDE ( [退貨訂單數], [訂單數] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 退貨
+		lineageTag: 8a230b61-f5f0-5c44-8902-cb809633fde2
+
+	/// 去年同期銷售額
+	measure '銷售額 去年同期' = CALCULATE ( [銷售額], SAMEPERIODLASTYEAR ( Orders[Order Date] ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+		lineageTag: 656eef83-3ab3-52f2-9a5f-cc3063bae4e0
+
+	column 'Row ID'
+		dataType: int64
+		isHidden
+		lineageTag: 23c7efe6-ad9b-591f-bf1f-94754032777b
+		summarizeBy: none
+		sourceColumn: Row ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 訂單編號
+	column 'Order ID'
+		dataType: string
+		lineageTag: c4d22d8a-e672-5141-868b-94e1f0463f33
+		summarizeBy: none
+		sourceColumn: Order ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 訂單日期
+	column 'Order Date'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 7cccd4f4-1174-5744-ad39-0cf5aec0ea6e
+		summarizeBy: none
+		sourceColumn: Order Date
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// 出貨日期
+	column 'Ship Date'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 6a1bcfcf-a16c-5247-9ade-0f76ca5007e6
+		summarizeBy: none
+		sourceColumn: Ship Date
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	/// 運送方式
+	column 'Ship Mode'
+		dataType: string
+		lineageTag: 0571e368-8256-5bc8-84e5-29d95d974cbc
+		summarizeBy: none
+		sourceColumn: Ship Mode
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 顧客編號
+	column 'Customer ID'
+		dataType: string
+		lineageTag: bf887303-4924-5dcf-a7af-e0c4f6da92ba
+		summarizeBy: none
+		sourceColumn: Customer ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 顧客名稱
+	column 'Customer Name'
+		dataType: string
+		lineageTag: 9be0bab0-0c1e-52ca-ae48-213435fa6445
+		summarizeBy: none
+		sourceColumn: Customer Name
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 顧客分群：Consumer / Corporate / Home Office
+	column Segment
+		dataType: string
+		lineageTag: f4ed851f-4840-5440-88ab-c54fc2766d92
+		summarizeBy: none
+		sourceColumn: Segment
+
+		annotation SummarizationSetBy = Automatic
+
+	column 'Postal Code'
+		dataType: int64
+		isHidden
+		lineageTag: e2a5c028-8835-5fd7-b926-c7ce960038ea
+		summarizeBy: none
+		sourceColumn: Postal Code
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 城市
+	column City
+		dataType: string
+		lineageTag: 1b62bf02-501b-568f-adfe-84ae39ff4f80
+		summarizeBy: none
+		sourceColumn: City
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 州 / 省
+	column State
+		dataType: string
+		lineageTag: 90fec527-bf87-5516-97d5-47609c7a2332
+		summarizeBy: none
+		sourceColumn: State
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 國家
+	column Country
+		dataType: string
+		lineageTag: c3bdac7b-2182-5ec0-8a92-6f0360a72cec
+		summarizeBy: none
+		sourceColumn: Country
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 地區（銷售區）
+	column Region
+		dataType: string
+		lineageTag: 119222ad-aec9-551c-b42f-8decb0be9d06
+		summarizeBy: none
+		sourceColumn: Region
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 市場：Asia Pacific / Europe / USCA / LATAM / Africa
+	column Market
+		dataType: string
+		lineageTag: 344c047a-e6d3-5363-82e6-7650f4ed0934
+		summarizeBy: none
+		sourceColumn: Market
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 商品編號
+	column 'Product ID'
+		dataType: string
+		lineageTag: a00c95ff-9135-5c8c-897b-59e78dd2f710
+		summarizeBy: none
+		sourceColumn: Product ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 品類
+	column Category
+		dataType: string
+		lineageTag: a588f057-5ec2-57e7-9257-b4d8cf77ac32
+		summarizeBy: none
+		sourceColumn: Category
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 子品類
+	column 'Sub-Category'
+		dataType: string
+		lineageTag: 45c0e52a-92f3-50ac-955f-839df74d9716
+		summarizeBy: none
+		sourceColumn: Sub-Category
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 商品名稱
+	column 'Product Name'
+		dataType: string
+		lineageTag: 195bdac2-bbb4-5d33-bcd9-43534e29272c
+		summarizeBy: none
+		sourceColumn: Product Name
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 折扣後銷售額
+	column Sales
+		dataType: double
+		formatString: #,##0.00
+		lineageTag: 40d3d573-bc2b-5399-8701-152adea443f1
+		summarizeBy: sum
+		sourceColumn: Sales
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 數量
+	column Quantity
+		dataType: int64
+		formatString: #,##0
+		lineageTag: cac6f91e-be0b-5b13-a084-f5a90721630d
+		summarizeBy: sum
+		sourceColumn: Quantity
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 折扣率（0.2 = 打八折）
+	column Discount
+		dataType: double
+		formatString: 0%
+		lineageTag: b6c9cc7e-7ce9-5c5e-9e05-2aef80c3c1a1
+		summarizeBy: none
+		sourceColumn: Discount
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 利潤
+	column Profit
+		dataType: double
+		formatString: #,##0.00
+		lineageTag: 9432f527-7dda-5979-a30b-3da05bdccbb1
+		summarizeBy: sum
+		sourceColumn: Profit
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 運費
+	column 'Shipping Cost'
+		dataType: double
+		formatString: #,##0.00
+		lineageTag: 74e8fbf9-5e01-53a3-855c-764e40becba1
+		summarizeBy: sum
+		sourceColumn: Shipping Cost
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 訂單優先度
+	column 'Order Priority'
+		dataType: string
+		lineageTag: d169a2ed-c2de-5c3d-b54f-58b961957044
+		summarizeBy: none
+		sourceColumn: Order Priority
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 訂單月份（Power Query 新增欄位）
+	column 'Order Month'
+		dataType: dateTime
+		formatString: yyyy-mm
+		lineageTag: 8310e878-19e6-5316-973b-4dc3815ecf2e
+		summarizeBy: none
+		sourceColumn: Order Month
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	partition Orders = m
+		mode: import
+		source =
+				let
+				    Source = Excel.Workbook(File.Contents(ExcelPath), null, true),
+				    SheetNav = Source{[Item = "Orders", Kind = "Sheet"]}[Data],
+				    Promoted = Table.PromoteHeaders(SheetNav, [PromoteAllScalars = true]),
+				    Typed = Table.TransformColumnTypes(Promoted, {
+				        {"Row ID", Int64.Type},
+				        {"Order ID", type text},
+				        {"Order Date", type date},
+				        {"Ship Date", type date},
+				        {"Ship Mode", type text},
+				        {"Customer ID", type text},
+				        {"Customer Name", type text},
+				        {"Segment", type text},
+				        {"Postal Code", Int64.Type},
+				        {"City", type text},
+				        {"State", type text},
+				        {"Country", type text},
+				        {"Region", type text},
+				        {"Market", type text},
+				        {"Product ID", type text},
+				        {"Category", type text},
+				        {"Sub-Category", type text},
+				        {"Product Name", type text},
+				        {"Sales", type number},
+				        {"Quantity", Int64.Type},
+				        {"Discount", type number},
+				        {"Profit", type number},
+				        {"Shipping Cost", type number},
+				        {"Order Priority", type text}
+				    }),
+				    Added = Table.AddColumn(Typed, "Order Month", each Date.StartOfMonth([Order Date]), type date)
+				in
+				    Added
+
+	annotation PBI_ResultType = Table

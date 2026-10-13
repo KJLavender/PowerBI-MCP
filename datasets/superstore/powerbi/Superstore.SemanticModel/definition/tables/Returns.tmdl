@@ -1,0 +1,47 @@
+/// 退貨訂單（Excel 工作表 Returns）
+table Returns
+	lineageTag: 0812f6c6-d025-5b19-a9b3-e2690c8be91c
+
+	/// 是否退貨
+	column Returned
+		dataType: string
+		lineageTag: 39097a7b-0117-50a4-b6be-adf0a2be9a25
+		summarizeBy: none
+		sourceColumn: Returned
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 訂單編號
+	column 'Order ID'
+		dataType: string
+		lineageTag: 087708f8-d03a-5fa3-a306-50d220e98ed3
+		summarizeBy: none
+		sourceColumn: Order ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column Region
+		dataType: string
+		isHidden
+		lineageTag: 45bf15b6-2074-53e3-9309-1406e8ff794a
+		summarizeBy: none
+		sourceColumn: Region
+
+		annotation SummarizationSetBy = Automatic
+
+	partition Returns = m
+		mode: import
+		source =
+				let
+				    Source = Excel.Workbook(File.Contents(ExcelPath), null, true),
+				    SheetNav = Source{[Item = "Returns", Kind = "Sheet"]}[Data],
+				    Promoted = Table.PromoteHeaders(SheetNav, [PromoteAllScalars = true]),
+				    Typed = Table.TransformColumnTypes(Promoted, {
+				        {"Returned", type text},
+				        {"Order ID", type text},
+				        {"Region", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table

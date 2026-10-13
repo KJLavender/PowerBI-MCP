@@ -1,0 +1,57 @@
+# 埋入 Global Superstore 原始活頁簿的業務事件（Ground Truth）
+# prepare.py 依這份檔案改寫 data/GlobalSuperstore.xlsx；分析引擎與問答助理「不可以」讀這個檔案，
+# 只有評分程式會拿它對答案。
+#
+# filter（皆為 AND；值為英文成員名稱）：
+#   market / region / country / segment / ship_mode   → 效果作用在整筆訂單
+#   category / sub_category / product                 → 效果作用在訂單明細
+# effects：
+#   volume          訂單（或明細）數量倍率：0.6 = 隨機刪掉 40%，1.5 = 隨機複製 50% 成新訂單
+#   price           售價倍率（銷售額與利潤同步調整，成本不變）
+#   cost            成本倍率（成本 = 銷售額 − 利潤）
+#   extra_discount  折扣率加幾個百分點（銷售額依原價重算，上限 85%）
+# start / end：生效期間；ramp_days：幾天內逐步達到完整效果
+#
+# 效果大小是依原始資料的正常波動決定的（見 docs/excel-dataset.md）：這份資料一天只有約 18 筆訂單，
+# 小於正常波動的事件任何方法都分不出來。detectable: false 的情境是刻意做小的，用來測試「無法判斷時要說無法判斷」。
+
+scenarios:
+  - id: apac-volume-drop
+    description: 亞太市場訂單量少了 55%（例：主要通路合約終止）
+    start: 2015-06-01
+    ramp_days: 7
+    filter: {market: Asia Pacific}
+    effects: {volume: 0.45}
+
+  - id: technology-price-up
+    description: Technology 全面漲價 30%，數量因此少 10%
+    start: 2015-08-03
+    filter: {category: Technology}
+    effects: {price: 1.30, volume: 0.90}
+
+  - id: furniture-cost-up
+    description: Furniture 進貨成本上漲 20%，售價未調整
+    start: 2015-07-06
+    filter: {category: Furniture}
+    effects: {cost: 1.20}
+
+  - id: latam-discount-promo
+    description: LATAM 四週促銷：折扣多 25 個百分點，訂單量多 60%
+    start: 2015-10-05
+    end: 2015-11-01
+    filter: {market: LATAM}
+    effects: {extra_discount: 0.25, volume: 1.6}
+
+  - id: corporate-churn
+    description: Corporate 企業客戶在五個月內逐步流失 70%
+    start: 2015-03-02
+    ramp_days: 150
+    filter: {segment: Corporate}
+    effects: {volume: 0.30}
+
+  - id: europe-tables-subtle
+    description: 歐洲 Tables 銷量少了 30%（刻意做小：小於正常波動，預期偵測不到）
+    start: 2015-09-01
+    filter: {market: Europe, sub_category: Tables}
+    effects: {volume: 0.70}
+    detectable: false

@@ -9,8 +9,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-PBIP_DIR = ROOT / "powerbi"
+from .dataset import PBIP_DIR, ROOT  # noqa: F401  (ROOT re-exported)
 
 
 # ----------------------------------------------------------------------------------------
@@ -39,7 +38,8 @@ class Measure:
 class Table:
     name: str
     description: str = ""
-    source_table: str | None = None  # physical table, taken from the M partition
+    source_table: str | None = None  # physical table / Excel sheet, taken from the M partition
+    source: dict = field(default_factory=dict)  # {"kind": "oracle"} or {"kind": "excel", "file": ...}
     columns: dict[str, Column] = field(default_factory=dict)
     measures: dict[str, Measure] = field(default_factory=dict)
 
@@ -73,6 +73,7 @@ class SemanticModel:
     tables: dict[str, Table]
     relationships: list[Relationship]
     usage: list[VisualUsage]
+    expressions: dict[str, str] = field(default_factory=dict)  # Power Query parameters (name → text value)
 
     @property
     def measures(self) -> dict[str, Measure]:
@@ -173,9 +174,15 @@ def parse_table(text: str) -> Table:
                 elif s.startswith("displayFolder:"):
                     obj.folder = s.split(":", 1)[1].strip()
             elif obj == "partition":
-                m = re.search(r'\{\[Name\s*=\s*"([^"]+)"\]\}', s)
-                if m:
+                # Oracle navigation {[Name = "TABLE"]} or Excel sheet {[Item = "Sheet", Kind = "Sheet"]}
+                m = re.search(r'\{\[\s*(?:Name|Item)\s*=\s*"([^"]+)"', s)
+                if m and table.source_table is None:
                     table.source_table = m.group(1)
+                if "Oracle.Database" in s:
+                    table.source = {"kind": "oracle"}
+                m = re.search(r'Excel\.Workbook\s*\(\s*File\.Contents\s*\(\s*("(?:[^"]|"")*"|[^)\s]+)', s)
+                if m:
+                    table.source = {"kind": "excel", "file": m.group(1)}
         i += 1
     return table
 
@@ -238,6 +245,14 @@ def _fields(node):
             yield from _fields(value)
 
 
+def parse_expressions(text: str) -> dict[str, str]:
+    """Text parameters, e.g. expression ExcelPath = "D:/data/book.xlsx" meta [IsParameterQuery=true, ...]"""
+    out = {}
+    for m in re.finditer(rf'^expression ({NAME})\s*=\s*"((?:[^"]|"")*)"', text, re.M):
+        out[unquote(m.group(1))] = m.group(2).replace('""', '"')
+    return out
+
+
 def load(pbip_dir: Path = PBIP_DIR) -> SemanticModel:
     model_dir = next(pbip_dir.glob("*.SemanticModel")) / "definition"
     report_dir = next(pbip_dir.glob("*.Report"))
@@ -246,7 +261,23 @@ def load(pbip_dir: Path = PBIP_DIR) -> SemanticModel:
         t = parse_table(f.read_text(encoding="utf-8"))
         tables[t.name] = t
     rels = parse_relationships((model_dir / "relationships.tmdl").read_text(encoding="utf-8"))
-    return SemanticModel(tables, rels, parse_report(report_dir))
+    expr_file = model_dir / "expressions.tmdl"
+    expressions = parse_expressions(expr_file.read_text(encoding="utf-8")) if expr_file.exists() else {}
+    for t in tables.values():
+        ref = t.source.get("file")
+        if ref:  # a literal path or the name of a text parameter
+            t.source["file"] = ref[1:-1].replace('""', '"') if ref.startswith('"') else expressions.get(ref, ref)
+    return SemanticModel(tables, rels, parse_report(report_dir), expressions)
+
+
+def ident(name: str) -> str:
+    """SQL identifier: plain names stay as they are (Oracle upper-case columns), others are quoted."""
+    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$#]*", name) else '"' + name.replace('"', '""') + '"'
+
+
+def safe_name(name: str) -> str:
+    """Column name usable as a Python identifier in formula expressions ("Order ID" → Order_ID)."""
+    return re.sub(r"\W+", "_", name).strip("_")
 
 
 # ----------------------------------------------------------------------------------------
@@ -390,9 +421,9 @@ class Translator:
             _, col = self._col(self._take("colref")[1])
             self._take("op", ")")
             if fn == "SUM":
-                name = self._base(f"sum_{col}", f"SUM(f.{col})")
+                name = self._base(f"sum_{safe_name(col)}", f"SUM(f.{ident(col)})")
             else:
-                name = self._base(f"dc_{col}", f"COUNT(DISTINCT f.{col})", distinct_of=col)
+                name = self._base(f"dc_{safe_name(col)}", f"COUNT(DISTINCT f.{ident(col)})", distinct_of=col)
             self.used.append(name)
             return name
         if fn == "COUNTROWS":
@@ -409,7 +440,7 @@ class Translator:
                 raise Unsupported("SUMX over non-fact table")
             sql = self._row_expr()
             self._take("op", ")")
-            key = "sumx_" + re.sub(r"\W+", "_", sql.replace("f.", "")).strip("_")
+            key = "sumx_" + safe_name(sql.replace("f.", "").replace('"', ""))
             self.used.append(self._base(key, f"SUM({sql})"))
             return key
         if fn == "DIVIDE":
@@ -428,7 +459,7 @@ class Translator:
         while self._peek()[0] in ("colref", "op", "num") and self._peek() != ("op", ",") \
                 and not (self._peek() == ("op", ")") and parts.count("(") <= parts.count(")")):
             kind, val = self._take()
-            parts.append(f"f.{self._col(val)[1]}" if kind == "colref" else val)
+            parts.append(f"f.{ident(self._col(val)[1])}" if kind == "colref" else val)
         if not parts:
             raise Unsupported("empty SUMX expression")
         return " ".join(parts)

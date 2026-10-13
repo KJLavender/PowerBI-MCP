@@ -1,0 +1,5 @@
+/// Excel 活頁簿的完整路徑
+expression ExcelPath = "C:\Users\user\Desktop\PowerBI MCP\datasets\superstore\data\GlobalSuperstore.xlsx" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: f5ebb998-7808-569f-8188-adeafa380d06
+
+	annotation PBI_ResultType = Text

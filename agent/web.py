@@ -15,22 +15,15 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-from analysis import tools
+from analysis import dataset, tools
 
 from . import history as history_store
-from .host import DEFAULT_MODEL, Agent, Turn
+from .host import DEFAULT_MODEL, HINTS, Agent, Turn
 
 STATIC = Path(__file__).with_name("static")
-EXAMPLES = [
-    "最近一天的報告有什麼需要注意的？",
-    "為什麼 2026-09-17 北區的銷售額下降？",
-    "截至 2026-08-03 的近 28 日，生鮮食品的毛利率為什麼下降？",
-    "2026-10-03 高雄左營店的業績為什麼大跌？",
-    "以 2026-08-23 為準，VIP 顧客的訂單數跟去年同期比，是不是在流失？",
-    "客單價是怎麼計算的？資料從哪裡來？",
-]
+EXAMPLES = HINTS.get("sample_questions", [])
 
 
 class State:
@@ -52,12 +45,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-REPORT_URL = os.environ.get("REPORT_URL", "http://localhost:8081/Reports/powerbi/RetailSales")
+# the published report next to the chat; datasets that are not on Report Server get the chat page only
+REPORT_URL = os.environ.get("REPORT_URL", "http://localhost:8081/Reports/powerbi/RetailSales"
+                            if dataset.NAME == "retail" else "")
 
 
 @app.get("/")
 async def report_with_chat():
     """Report Server report on the left, chat panel on the right."""
+    if not REPORT_URL:
+        return RedirectResponse("/chat")
     return FileResponse(STATIC / "report.html")
 
 
@@ -128,7 +125,7 @@ def best_page(filters: dict, tool: str) -> str | None:
     """Report page whose visuals use the most of the focus dimensions (read from the PBIR report)."""
     c = tools.ctx()
     if tool == "data_quality":
-        wanted = {f"{c.config['data_quality']['etl_table']}."}
+        wanted = {f"{c.dq['etl_table']}."} if c.dq.get("etl_table") else set()
     else:
         wanted = {f"{d.table}.{d.column}" for d in c.dims.values() if d.label in filters}
     if not wanted:
@@ -204,6 +201,7 @@ async def chat(request: Request):
                 focus = focus_of(turn) if not turn.ungrounded else None
                 history_store.save_turn(session, turn, focus, body.get("context"))
                 await queue.put({"type": "answer", "text": turn.answer, "grounded": not turn.ungrounded,
+                                 "check": turn.check,
                                  "focus": focus, "session": session,
                                  "retries": turn.retries, "seconds": round(turn.seconds, 1),
                                  "tools": [{"name": c["tool"], "args": c["args"], "result": c.get("result", "")}

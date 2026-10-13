@@ -1,6 +1,8 @@
 # 分析設定：業務知識（要看哪些維度、怎麼往下鑽）與門檻。
 # 欄位必須存在於 Power BI 模型，且能從 fact 沿著「多對一」關聯走到（啟動時會驗證）。
 
+description: 零售銷售 Power BI 報表（資料來自 Oracle，每日更新）
+
 fact: FACT_SALES
 date: DIM_DATE.FULL_DATE
 holiday: DIM_DATE.HOLIDAY_NAME     # 用來標註節日造成的變化
@@ -36,7 +38,35 @@ windows:
   month: {days: 28, label: 近 28 日}
   # 慢性變化：與去年同期相比，並扣除整體的成長（成員相對整體的消長），抓「每週只掉一點」的流失
   # like_for_like：整體基準只計算兩期都有營業的門市（同店比較），新店不會讓舊門市看起來衰退
-  year:  {days: 28, label: 近 28 日 vs 去年同期, mode: yoy, like_for_like: store}
+  year:  {days: 28, label: 近 28 日 vs 去年同期, mode: yoy, like_for_like: store,
+          help: 近 28 日 vs 去年同期（相對整體同店成長）}
+
+# 有特定業務意義的量值（量、價、折扣、毛利），供「量價判讀」與評分使用
+roles:
+  sales: 銷售額
+  volume: 銷售數量
+  orders: 訂單數
+  unit_price: 平均成交單價    # 同品項售價指數（排除商品組合影響）用這個量值
+  discount_rate: 折扣率
+  margin_rate: 毛利率
+  extra: [成本, 毛利, 折扣金額]
+price_item: product
+
+# 給問答助理的提示（範例與時間窗用法）
+agent:
+  examples: >-
+    例如「VIP 顧客的訂單數」→ metric="訂單數"、filters={"顧客分群": "VIP"}；「北區 3C配件」→ filters={"區域": "北區", "品類": "3C配件"}。
+  window_rules: |-
+    - 問「某一天」（例如 9/17、昨天）用 window="day"；「昨天 / 最近一天」= {latest}。
+    - 「這週 / 最近一週」用 window="week"；「這個月 / 最近幾週」用 window="month"；「跟去年比 / 長期流失」用 window="year"。
+  ask_hint: "**日期**（例如 2026-09-17，或整個月 2026-06）、**指標**（銷售額、毛利率、訂單數…）與**範圍**（區域、門市、品類…）"
+  sample_questions:
+    - 最近一天的報告有什麼需要注意的？
+    - 為什麼 2026-09-17 北區的銷售額下降？
+    - 截至 2026-08-03 的近 28 日，生鮮食品的毛利率為什麼下降？
+    - 2026-10-03 高雄左營店的業績為什麼大跌？
+    - 以 2026-08-23 為準，VIP 顧客的訂單數跟去年同期比，是不是在流失？
+    - 客單價是怎麼計算的？資料從哪裡來？
 
 thresholds:
   history_days: 182          # 用來估計「正常波動」的歷史長度

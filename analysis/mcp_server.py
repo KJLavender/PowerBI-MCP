@@ -12,12 +12,13 @@ from mcp.types import ToolAnnotations
 
 from . import tools
 
-INSTRUCTIONS = """\
-零售銷售 Power BI 報表的分析工具（唯讀）。資料來自 Oracle，每日更新；指標與關聯取自 Power BI 模型。
+INSTRUCTIONS = f"""\
+{tools.ctx().config.get("description", "Power BI 報表")}的分析工具（唯讀）。指標與關聯取自 Power BI 模型。
 - 不確定指標、維度或成員名稱時，先呼叫 describe_model 或 list_members。
 - 回答「為什麼某指標變化」一定要呼叫 explain_change，並只引用工具回傳的數字與文字。
-- filters 用維度名稱對應成員，例如 {"區域": "北區", "品類": "3C配件"}；不給代表整體。
-- date 為 YYYY-MM-DD 營業日，省略代表最新一天。window：day / week / month / year。
+- filters 用維度名稱對應成員，例如 {{"維度名稱": "成員"}}；不給代表整體。
+- date 為 YYYY-MM-DD，省略代表最新一天。window：{" / ".join(tools.ctx().config["windows"])}。
+- 結果中以底線開頭的欄位（_facts、_key）是給回答查核程式用的結構化資料。
 """
 
 server = MCPServer("powerbi-analysis", instructions=INSTRUCTIONS, version="0.3.0")
@@ -39,7 +40,7 @@ def describe_model() -> str:
 
 @server.tool(annotations=READ_ONLY)
 def list_members(dimension: str, contains: str | None = None) -> str:
-    """列出某維度的成員名稱（例如 區域、門市、通路、品類、商品、顧客分群），可用 contains 篩選。"""
+    """列出某維度的成員名稱（維度見 describe_model），可用 contains 篩選。"""
     return _run(tools.list_members, dimension, contains)
 
 
@@ -73,7 +74,7 @@ def metric_trend(metric: str, filters: dict[str, str] | None = None, start: str 
 
 @server.tool(annotations=READ_ONLY)
 def data_quality(date: str | None = None) -> str:
-    """某營業日的資料品質：ETL 狀態、載入筆數、資料量異常的門市。"""
+    """某營業日的資料品質：ETL 狀態與載入筆數（若資料來源有）、明細筆數、資料量異常的單位。"""
     return _run(tools.data_quality, date)
 
 

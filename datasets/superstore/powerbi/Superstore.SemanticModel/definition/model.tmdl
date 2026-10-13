@@ -1,0 +1,15 @@
+model Model
+	culture: zh-TW
+	defaultPowerBIDataSourceVersion: powerBI_V3
+	sourceQueryCulture: zh-TW
+	dataAccessOptions
+		legacyRedirects
+		returnErrorValuesAsNull
+
+annotation PBI_QueryOrder = ["ExcelPath", "Orders", "People", "Returns"]
+
+annotation __PBI_TimeIntelligenceEnabled = 0
+
+ref table Orders
+ref table People
+ref table Returns

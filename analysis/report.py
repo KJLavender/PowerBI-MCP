@@ -10,10 +10,8 @@ from pathlib import Path
 import numpy as np
 
 from .context import DATA_DIR, Context
+from .dataset import REPORT_DIR
 from .engine import Engine, Finding, Stat
-from .semantic import ROOT
-
-REPORT_DIR = ROOT / "reports"
 WEEKDAYS = "一二三四五六日"
 
 
@@ -56,10 +54,10 @@ class Writer:
                 if str(r) not in rels:
                     rels.append(str(r))
         cols = "、".join(f"{self.ctx.dims[k].table}[{self.ctx.dims[k].column}] = {v}" for k, v in f.scope.items())
-        return f"{cols}（關聯：{'；'.join(rels)}）"
+        return f"{cols}（關聯：{'；'.join(rels)}）" if rels else cols
 
     def headline(self, f: Finding) -> str:
-        ref = "整體同店" if self.windows[f.window].get("mode") == "yoy" else "去年同期"
+        ref = self.e.expected_label(f.window, bool(f.scope)).replace("變化", "").replace("間的", "")
         parts = [f"{s.metric} {change_text(s.kind, s.change)}"
                  + (f"（{ref} {change_text(s.kind, s.expected)}）" if s.expected is not None else "")
                  for s in f.significant]
@@ -69,7 +67,7 @@ class Writer:
         self.w(f"### {n}. {self.headline(f)}", "")
         mode = self.windows[f.window].get("mode")
         base_label = {"day": "近 4 週同星期平均", "yoy": "去年同期"}.get("day" if f.window == "day" else mode, "前一期間")
-        exp_label = "整體同店同期變化" if mode == "yoy" else "去年同期間的變化"
+        exp_label = self.e.expected_label(f.window, bool(f.scope))
         self.w(f"| 指標 | 本期 | {base_label} | 變化 | {exp_label} | z |", "|---|---|---|---|---|---|")
         for s in sorted(f.stats, key=lambda s: not s.significant):
             self.w(self.stat_row(s))
@@ -128,13 +126,17 @@ class Writer:
                 self.w(f"- ⚠️ {issue['message']}")
             self.w("", "> 以下與上述範圍相關的單日變化，可能是資料缺漏而非實際營運變化。")
         else:
-            self.w("- ✅ ETL 批次成功，載入筆數與明細一致，各門市資料量正常。")
+            self.w("- ✅ ETL 批次成功，載入筆數與明細一致，各門市資料量正常。" if self.ctx.dq.get("etl_table")
+                   else "- ✅ 未發現資料品質問題（此資料來源沒有載入紀錄，僅能依明細判斷）。")
         self.w("")
 
         self.w("## 2. 關鍵指標", "", "| 指標 | 當日 | vs 上週同日 | vs 近 4 週同星期平均 | 近 7 日 | vs 前 7 日 |",
                "|---|---|---|---|---|---|")
+        signed = set(self.ctx.roles.get("signed", []))
         for k in self.r["kpis"]:
             m = k["metric"]
+            if m in signed:  # can be negative: a % change of it means nothing
+                k = {**k, "vs_last_week": None, "vs_4wk_avg": None, "week_vs_prev": None}
             self.w(f"| {m} | {self.ctx.fmt(m, k['value'])} | {change_text(k['kind'], k['vs_last_week'])} | "
                    f"{change_text(k['kind'], k['vs_4wk_avg'])} | {self.ctx.fmt(m, k['week'])} | "
                    f"{change_text(k['kind'], k['week_vs_prev'])} |")
@@ -167,7 +169,7 @@ class Writer:
                "- **顯著**：變化量與該序列自身過去半年的正常波動相比，超過門檻個標準差（z 值；整體 ≥ "
                f"{self.ctx.config['thresholds']['z_alert']}，維度成員 ≥ {self.ctx.config['thresholds']['z_alert_member']}），"
                "且幅度夠大。7 日與 28 日的比較已扣除去年同期的季節性變化。",
-               "- **範圍取捨**：若「北區 × 3C配件」的變化扣除後，3C配件 其餘區域都沒有變化，就只報告 北區 × 3C配件；"
+               "- **範圍取捨**：若「A × B」的變化扣除後，B 的其餘部分都沒有變化，就只報告 A × B；"
                "若其他成員也同向變動，則報告較大的範圍。", "")
         self.w("| 指標 | 說明（Power BI 模型） | DAX |", "|---|---|---|")
         for m in self.r["metrics"]:
@@ -198,7 +200,7 @@ def to_json(result: dict, engine: Engine) -> dict:
 
 def write(ctx: Context, d: date) -> Path:
     result = run(ctx, d)
-    REPORT_DIR.mkdir(exist_ok=True)
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "reports").mkdir(parents=True, exist_ok=True)
     md = REPORT_DIR / f"{d}.md"
     md.write_text(Writer(ctx, result).render(), encoding="utf-8")

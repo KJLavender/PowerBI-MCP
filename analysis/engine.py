@@ -170,7 +170,7 @@ class Engine:
         return self.cache[dims]
 
     def groupings(self) -> list[tuple[str, ...]]:
-        return ([()] + [(k,) for k in self.ctx.dims]
+        return ([()] + [(k,) for k, d in self.ctx.dims.items() if d.scan]
                 + [tuple(c) for c in self.ctx.config.get("combinations", [])])
 
     def bases_of(self, scope: dict) -> dict | None:
@@ -196,7 +196,8 @@ class Engine:
     def changes(self, bases: dict, metric: str, window: str, member: bool = True):
         """cur, base, raw change, expected change, adjusted change (all series over dates).
         day:  vs same weekday of previous 4 weeks, no adjustment
-        pop:  vs previous period, minus the same change one year earlier (seasonality)
+        pop:  vs previous period, minus the same change one year earlier (seasonality); with
+              `seasonal: total` members use the total's change a year earlier (less noisy on small data)
         yoy:  vs same period last year, relative to the total's YoY (members only)"""
         f = self.ctx.formulas[metric]
         if any(b not in bases for b in f.bases):
@@ -216,12 +217,42 @@ class Engine:
             rc, rb = evaluate(f.expr, ref_cur)[:, 0], evaluate(f.expr, ref_base)[:, 0]
             with np.errstate(divide="ignore", invalid="ignore"):
                 ly = rc - rb if abs_kind else np.where(rb > 0, rc / rb - 1, np.nan)
+        elif member and self.windows[window].get("seasonal") == "total":
+            ly = shift(self.total_change(metric, window), YEAR)
         else:
             ly = shift(chg, YEAR)
         with np.errstate(divide="ignore", invalid="ignore"):
             adj = chg - ly if self.kind(metric) == "abs" else (1 + chg) / (1 + ly) - 1
         adj = np.where(np.isnan(ly), chg, adj)  # no history a year ago: fall back to raw change
         return cur, base, chg, ly, adj
+
+    def total_change(self, metric: str, window: str) -> np.ndarray:
+        key = ("total_change", metric, window)
+        if key not in self.cache:
+            self.cache[key] = self.changes(self.cube(()).column(()), metric, window, member=False)[2]
+        return self.cache[key]
+
+    def signed(self, bases: dict, metric: str, window: str) -> bool:
+        """A metric that can be negative or near zero (e.g. profit): a % change of it is meaningless.
+        Listed under roles.signed, or seen below zero in this scope's history."""
+        if self.kind(metric) == "abs":
+            return False
+        if metric in self.ctx.roles.get("signed", []):
+            return True
+        f = self.ctx.formulas[metric]
+        if any(b not in bases for b in f.bases):
+            return False
+        w = self.windows[window]
+        cur, _ = windowed(bases, window, w["days"], w.get("mode", "pop"))
+        values = evaluate(f.expr, cur)[-self.th["history_days"]:, 0]
+        return bool(np.nanmin(values, initial=0) < 0)
+
+    def expected_label(self, window: str, member: bool = True) -> str:
+        """What the 'expected' change of a window is, in words."""
+        w = self.windows[window]
+        if w.get("mode") == "yoy":
+            return "整體同店同期變化" if w.get("like_for_like") else "整體同期變化"
+        return "整體去年同期間的變化" if member and w.get("seasonal") == "total" else "去年同期間的變化"
 
     def z_threshold(self, scope_dims) -> float:
         return self.th["z_alert"] if not scope_dims else self.th["z_alert_member"]
@@ -247,15 +278,15 @@ class Engine:
     def stat(self, bases: dict, metric: str, window: str, z_th: float | None = None,
              member: bool = True) -> Stat | None:
         out = self.changes(bases, metric, window, member)
-        if out is None:
+        if out is None or self.signed(bases, metric, window):
             return None
         cur, base, chg, ly, adj = out
         days = self.windows[window]["days"]
         t = len(cur) - 1
         lo, hi = t - self.th["history_days"], t - (1 if window == "day" else days)
         hist = adj[max(lo, 0):max(hi, 0) + 1]
-        hist = hist[~np.isnan(hist)]
-        if np.isnan(adj[t]) or len(hist) < 20:
+        hist = hist[np.isfinite(hist)]
+        if not np.isfinite(adj[t]) or len(hist) < 20:
             return None
         kind = self.kind(metric)
         med = np.median(hist)
@@ -265,7 +296,21 @@ class Engine:
         expected = None if ly is None or np.isnan(ly[t]) else float(ly[t])
         s = Stat(metric, window, float(cur[t]), float(base[t]), float(chg[t]), expected, float(z), kind)
         s.significant = abs(z) >= (z_th or self.th["z_alert"]) and abs(adj[t]) >= min_move
+        min_rows = self.th.get("min_rows", 0)
+        if min_rows:
+            n_cur, n_base = self.sample_size(bases, window)
+            if min(n_cur, n_base) < min_rows:
+                # a handful of order lines can swing any ratio: don't call it significant either way
+                s.significant = False
+                s.note = (f"樣本太少：本期 {n_cur:,.0f} 筆明細、比較基準 {n_base:,.0f} 筆"
+                          f"（至少各需 {min_rows} 筆才判斷是否異常）")
         return s
+
+    def sample_size(self, bases: dict, window: str) -> tuple[float, float]:
+        """Order lines in the current window and in its comparison base."""
+        w = self.windows[window]
+        cur, base = windowed({"rows": bases["rows"]}, window, w["days"], w.get("mode", "pop"))
+        return float(np.nan_to_num(cur["rows"][-1, 0])), float(np.nan_to_num(base["rows"][-1, 0]))
 
     def share(self, bases: dict, window: str) -> float:
         days = self.windows[window]["days"]
@@ -439,7 +484,7 @@ class Engine:
             hol = sorted({cal[x] for x in ds if cal.get(x)})
             if hol:
                 f.notes.append(f"{label}包含節日：{'、'.join(hol)}")
-        unit = self.ctx.config["data_quality"]["unit"]
+        unit = self.ctx.dq.get("unit")
         for issue in dq:
             if f.window == "day" and issue.get("unit") and f.scope.get(unit, issue["unit"]) == issue["unit"]:
                 f.notes.append(f"資料品質：{issue['message']}")
@@ -447,7 +492,7 @@ class Engine:
         additive = [s for s in f.significant if not self.ctx.formulas[s.metric].is_ratio]
         if len(f.scope) == 1 and additive:
             f.concentrated_in = self.concentration(f, additive[0])
-        if f.window != "day" and unit not in f.scope:
+        if unit and f.window != "day" and unit not in f.scope:
             opened, closed = self.unit_changes(f.scope, f.window, unit)
             label = self.ctx.dims[unit].label
             if opened:
@@ -464,7 +509,8 @@ class Engine:
         best = None
         for k in self.ctx.dims:
             # skip the scope's own hierarchy and very fine dimensions (too many members to be a useful "why")
-            if k in f.scope or self.ctx.dims[k].parent in f.scope or len(self.cube((k,)).members) > 30:
+            if (k in f.scope or self.ctx.dims[k].parent in f.scope or not self.ctx.dims[k].scan
+                    or len(self.cube((k,)).members) > 30):
                 continue
             cube = self.cube(tuple(f.scope) + (k,))
             values = tuple(f.scope.values())
@@ -510,17 +556,20 @@ class Engine:
     # ---------------- data quality ----------------
     def data_quality(self, d: date) -> list[dict]:
         out = []
-        etl = self.db.execute("SELECT etl_rows, etl_status FROM etl_log WHERE business_date = ?", [d]).fetchone()
-        fact = self.db.execute("SELECT fact_rows FROM snapshot_log WHERE business_date = ?", [d]).fetchone()
-        if not etl:
-            out.append({"type": "etl_missing", "message": "找不到當日 ETL 批次紀錄"})
-        else:
-            rows, status = etl
-            if status != "SUCCESS":
-                out.append({"type": "etl_status", "message": f"ETL 狀態為 {status}"})
-            if fact and int(fact[0]) != int(rows):
-                out.append({"type": "row_mismatch", "message": f"ETL 回報 {rows:,} 筆，實際明細 {int(fact[0]):,} 筆"})
-        unit = self.ctx.config["data_quality"]["unit"]
+        if self.ctx.dq.get("etl_table"):
+            etl = self.db.execute("SELECT etl_rows, etl_status FROM etl_log WHERE business_date = ?", [d]).fetchone()
+            fact = self.db.execute("SELECT fact_rows FROM snapshot_log WHERE business_date = ?", [d]).fetchone()
+            if not etl:
+                out.append({"type": "etl_missing", "message": "找不到當日 ETL 批次紀錄"})
+            else:
+                rows, status = etl
+                if status != "SUCCESS":
+                    out.append({"type": "etl_status", "message": f"ETL 狀態為 {status}"})
+                if fact and int(fact[0]) != int(rows):
+                    out.append({"type": "row_mismatch", "message": f"ETL 回報 {rows:,} 筆，實際明細 {int(fact[0]):,} 筆"})
+        unit = self.ctx.dq.get("unit")
+        if not unit:
+            return out
         cube = self.cube((unit,))
         rows = cube.data["rows"]
         t = len(cube.dates) - 1
@@ -606,11 +655,13 @@ class Engine:
     def profile(self, f: Finding) -> dict:
         """Volume / price / discount / margin pattern of a scope, from its own metric changes."""
         moves = {s.metric: s.change for s in f.stats}
+        r = self.ctx.roles
+        margin = r["margin_rate"]
         tags = []
-        for metrics, up, down, th in ((("銷售數量", "訂單數"), "量增", "量減", self.th["min_change_pct"]),
-                                      (("平均成交單價", "客單價"), "價升", "價降", self.th["min_change_pct"]),
-                                      (("折扣率",), "折扣加深", "折扣減少", self.th["min_ratio_change"]),
-                                      (("毛利率",), "毛利率上升", "毛利率下降", self.th["min_ratio_change"])):
+        for metrics, up, down, th in (((r["volume"], r["orders"]), "量增", "量減", self.th["min_change_pct"]),
+                                      ((r["unit_price"], "客單價"), "價升", "價降", self.th["min_change_pct"]),
+                                      ((r["discount_rate"],), "折扣加深", "折扣減少", self.th["min_ratio_change"]),
+                                      ((margin,), f"{margin}上升", f"{margin}下降", self.th["min_ratio_change"])):
             m = next((x for x in metrics if x in moves), None)
             if m and abs(moves[m]) >= th:
                 tags.append(up if moves[m] > 0 else down)

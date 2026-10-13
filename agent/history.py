@@ -9,9 +9,11 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .host import ROOT, Turn
+from analysis.dataset import DATA_DIR
 
-DB = ROOT / "data" / "chats.sqlite"
+from .host import Turn
+
+DB = DATA_DIR / "chats.sqlite"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -32,6 +34,8 @@ def connect() -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(SCHEMA)
+    if "checks" not in {r[1] for r in con.execute("PRAGMA table_info(turns)")}:
+        con.execute("ALTER TABLE turns ADD COLUMN checks TEXT")  # per-check result, added later
     return con
 
 
@@ -44,12 +48,14 @@ def save_turn(conversation_id: str, turn: Turn, focus: dict | None, context: dic
                     (conversation_id, title, now, now))
         idx = con.execute("SELECT COALESCE(MAX(idx), -1) + 1 FROM turns WHERE conversation_id = ?",
                           (conversation_id,)).fetchone()[0]
-        con.execute("INSERT INTO turns VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+        con.execute("INSERT INTO turns (conversation_id, idx, created_at, question, answer, grounded, retries, "
+                    "seconds, tools, evidence, focus, context, checks) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
             conversation_id, idx, now, turn.question, turn.answer, int(not turn.ungrounded), turn.retries,
             round(turn.seconds, 1), json.dumps(turn.tool_calls, ensure_ascii=False),
             json.dumps(turn.evidence, ensure_ascii=False),
             json.dumps(focus, ensure_ascii=False) if focus else None,
-            json.dumps(context, ensure_ascii=False) if context else None))
+            json.dumps(context, ensure_ascii=False) if context else None,
+            json.dumps(turn.check, ensure_ascii=False) if turn.check else None))
 
 
 def list_conversations(limit: int = 100) -> list[dict]:
@@ -68,7 +74,8 @@ def load_turns(conversation_id: str) -> list[dict]:
         out.append({"question": r["question"], "answer": r["answer"], "grounded": bool(r["grounded"]),
                     "retries": r["retries"], "seconds": r["seconds"], "created_at": r["created_at"],
                     "tools": json.loads(r["tools"]), "evidence": json.loads(r["evidence"]),
-                    "focus": json.loads(r["focus"]) if r["focus"] else None})
+                    "focus": json.loads(r["focus"]) if r["focus"] else None,
+                    "check": json.loads(r["checks"]) if r["checks"] else None})
     return out
 
 
@@ -78,6 +85,7 @@ def restore_history(conversation_id: str) -> list[Turn]:
     for t in load_turns(conversation_id)[-6:]:
         turn = Turn(t["question"], t["answer"], tool_calls=t["tools"], retries=t["retries"], seconds=t["seconds"])
         turn.evidence = t["evidence"]
+        turn.check = t["check"] or {}
         turns.append(turn)
     return turns
 

@@ -1,0 +1,77 @@
+# Global Superstore（Excel → Power BI）的分析設定：要看哪些維度、怎麼往下鑽、門檻。
+# 欄位必須存在於 Power BI 模型（datasets/superstore/powerbi），啟動時會驗證。
+
+description: Global Superstore 銷售報表（資料來自 Excel 活頁簿，2012–2015 年的每日訂單）
+
+fact: Orders
+date: Orders.Order Date
+# 沒有節日欄位、也沒有 ETL 批次紀錄：Excel 來源只能依明細本身判斷
+
+dimensions:
+  market:       {label: 市場,     column: Orders.Market}
+  region:       {label: 地區,     column: Orders.Region,       parent: market}
+  country:      {label: 國家,     column: Orders.Country,      parent: region}
+  category:     {label: 品類,     column: Orders.Category}
+  sub_category: {label: 子品類,   column: Orders.Sub-Category, parent: category}
+  segment:      {label: 顧客分群, column: Orders.Segment}
+  ship_mode:    {label: 運送方式, column: Orders.Ship Mode}
+  # 商品有三千多種、每種一年只賣幾次：不單獨掃描，只用來計算同品項售價指數
+  product:      {label: 商品,     column: Orders.Product Name, parent: sub_category, scan: false}
+
+combinations:
+  - [market, category]
+  - [market, segment]
+  - [market, sub_category]
+  - [region, category]
+  - [segment, category]
+
+# 一天平均只有約 18 筆訂單：單日比較雜訊太大，不提供 day，問「某一天」時改用近 7 日
+default_window: week
+# seasonal: total → 季節性校正用「整體」去年同期的變化（單一成員去年的變化本身就是雜訊）
+windows:
+  week:  {days: 7,  label: 近 7 日,  seasonal: total}
+  month: {days: 28, label: 近 28 日, seasonal: total}
+  year:  {days: 28, label: 近 28 日 vs 去年同期, mode: yoy}
+
+roles:
+  sales: 銷售額
+  volume: 銷售數量
+  orders: 訂單數
+  unit_price: 平均標價
+  discount_rate: 折扣率
+  margin_rate: 利潤率
+  extra: [成本, 利潤, 折扣金額]
+  signed: [利潤]            # 可能為負或接近 0：不以變化率判斷異常，改看利潤率
+price_item: product
+
+thresholds:
+  history_days: 364          # 交易量少：用一年的歷史估計正常波動
+  min_rows: 60               # 本期與比較基準各至少 60 筆明細才判斷是否異常
+  z_alert: 3.0
+  z_alert_member: 5.0          # 小量資料的成員波動是厚尾分布：以原始資料校準（約每天 0.6 則背景變化）
+  min_change_pct: 0.05
+  min_share: 0.01
+  min_ratio_change: 0.01
+  pattern_min_z: 2.0          # 量價型態只列「至少偏大」的變化（小量資料 ±5% 只是雜訊）
+  price_index_move: 0.08       # 同品項售價指數的雜訊約 ±4%，超過 8% 才算價格變動
+  max_findings: 8
+  repeat_days: 14
+
+# PBI_VARIANT=original：讀未埋入事件的原始活頁簿（用來量測自然波動與誤報）
+variants:
+  original: GlobalSuperstore_original.xlsx
+
+evaluation: {start: 2015-03-01, end: 2015-12-31}
+
+agent:
+  examples: >-
+    例如「亞太市場的訂單數」→ metric="訂單數"、filters={"市場": "Asia Pacific"}；
+    「歐洲的 Furniture」→ filters={"市場": "Europe", "品類": "Furniture"}。成員名稱是英文，要照原文寫。
+  window_rules: |-
+    - 這份資料每天交易量少，沒有單日比較：問「某一天 / 這週」用 window="week"（截至該日的近 7 日）。
+    - 問「整個月」（例如 2015/6、6 月）時 date 寫 "2015-06"；「最近幾週 / 這個月」用 window="month"；「跟去年比 / 長期流失」用 window="year"。
+    - 「最近」= {latest}。
+  ask_hint: "**日期**（例如 2015-06-30，或整個月 2015-06）、**指標**（銷售額、利潤率、訂單數…）與**範圍**（市場、品類、顧客分群…）"
+  sample_questions:
+    - 最近一週的報告有什麼需要注意的？
+    - 利潤率是怎麼計算的？資料從哪裡來？

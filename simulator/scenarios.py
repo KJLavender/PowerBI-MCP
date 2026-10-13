@@ -50,7 +50,7 @@ class Scenario:
         return all(key not in attrs or attrs[key] in allowed for key, allowed in self.filter.items())
 
 
-def load(path: Path = DEFAULT_FILE) -> list[Scenario]:
+def load(path: Path = DEFAULT_FILE, filter_keys: set[str] = FILTER_KEYS) -> list[Scenario]:
     if not path.exists():
         return []
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -59,7 +59,7 @@ def load(path: Path = DEFAULT_FILE) -> list[Scenario]:
         if not item.get("enabled", True):
             continue
         flt = {k: set(v if isinstance(v, list) else [v]) for k, v in (item.get("filter") or {}).items()}
-        unknown = flt.keys() - FILTER_KEYS
+        unknown = flt.keys() - filter_keys
         if unknown:
             raise ValueError(f"scenario {item['id']}: unknown filter keys {unknown}")
         effects = item.get("effects") or {}

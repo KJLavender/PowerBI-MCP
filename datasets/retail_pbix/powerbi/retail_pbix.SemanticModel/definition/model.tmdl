@@ -1,0 +1,10 @@
+model Model
+	culture: zh-TW
+
+ref table FACT_SALES
+ref table DIM_DATE
+ref table DIM_STORE
+ref table DIM_CHANNEL
+ref table DIM_PRODUCT
+ref table DIM_CUSTOMER
+ref table ETL_BATCH_LOG

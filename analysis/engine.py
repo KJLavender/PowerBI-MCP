@@ -30,6 +30,10 @@ from .context import Context
 WEEKDAY_LAGS = (7, 14, 21, 28)
 YEAR = 364
 BROAD = 0.5   # complement moving ≥ 50% as much as the scope itself ⇒ effect is not specific
+# used when a dataset config leaves a threshold out (e.g. a draft written by import-pbix)
+DEFAULT_THRESHOLDS = {"history_days": 182, "z_alert": 3.0, "z_alert_member": 4.0, "min_change_pct": 0.05,
+                      "min_share": 0.01, "min_ratio_change": 0.01, "dq_store_ratio": 0.5, "max_findings": 8,
+                      "repeat_days": 14}
 
 warnings.filterwarnings("ignore", message="Mean of empty slice")
 
@@ -153,7 +157,7 @@ class Engine:
         self.ctx = ctx
         self.db = db or store.open_db(read_only=True)
         self.order_dims = set(store.order_dims(self.db))
-        self.th = ctx.config["thresholds"]
+        self.th = {**DEFAULT_THRESHOLDS, **ctx.config.get("thresholds", {})}
         self.windows = ctx.config["windows"]
         used = [m for m in ctx.model.used_measures() if m in ctx.formulas]
         self.metrics = used or list(ctx.formulas)   # what the report shows

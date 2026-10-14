@@ -22,6 +22,7 @@ Nothing leaves the machine: the data source, the analysis, the MCP server and th
 | 4. Report Server | Power BI Report Server with a daily 06:30 scheduled refresh from Oracle — the typical on-prem setup |
 | 5. Excel report | The same engine and agent on a Power BI report built from the public Global Superstore Excel workbook (18 orders a day): data read through the model's Power Query, thresholds calibrated on the untouched workbook (0.2 background findings a day), **4 of 5 detectable injected events found** |
 | 6. Verification | Every answer goes through 9 mechanical checks (date, scope, numbers, names, number-to-thing binding, direction, significance, unprovable causes, key finding). A failing answer is sent back; if it still fails, the analysis tool's own reading is shown instead. **0 wrong answers got past the checks**; a mutation test breaks correct answers on purpose and the checks catch **94–97%**; the engine's numbers match Power BI's own DAX results (**9,876 numbers, 0 differences**) |
+| 7. Any .pbix | `python -m analysis import-pbix FILE.pbix --name X`: the model is read from the engine Power BI Desktop runs while the file is open (DMVs), the pages from the .pbix itself, the data with DAX — so any data source works — and a draft of the analysis settings is inferred from the data. On the retail .pbix with no manual settings: snapshots identical to reading Oracle directly (**544,515 values, 0 differences**), all injected events found, **10/11** questions answered correctly, 0 wrong answers passed the checks |
 
 Example (from `python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`):
 
@@ -119,6 +120,7 @@ Detailed design notes are written in Traditional Chinese:
 - [docs/analysis.md](docs/analysis.md) — how the engine reads the model, detects changes and picks the explaining scope
 - [docs/agent.md](docs/agent.md) — MCP tools, grounding checks, Q&A evaluation
 - [docs/report-server.md](docs/report-server.md) — Report Server setup and the PBIR-format pitfall
+- [docs/pbix-import.md](docs/pbix-import.md) — importing a report straight from a .pbix
 - [docs/excel-dataset.md](docs/excel-dataset.md) — the Excel-based report: calibration on small data, detection results, reconciliation
 
 ## Limitations

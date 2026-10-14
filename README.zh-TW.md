@@ -18,6 +18,7 @@
 | 4. Report Server | Power BI Report Server 每天 06:30 從 Oracle 排程更新，即典型的地端架構 |
 | 5. Excel 報表 | 同一套引擎與問答，用在以公開 Global Superstore 活頁簿做成的 Power BI 報表（一天約 18 筆訂單）：照模型的 Power Query 讀 Excel，門檻用未修改的原始活頁簿校準（每天背景變化 0.2 則），**可偵測的 5 個埋入事件抓到 4 個** |
 | 6. 查核 | 每個回答都經過 9 項機械式查核（日期、範圍、數字、名稱、對應、方向、顯著性、無據原因、重點）。不通過就退回重寫，仍不通過時改顯示分析工具自己的判讀。**沒有任何錯誤回答通過查核**；突變測試刻意竄改正確回答，查核攔下 **94–97%**；分析引擎的數字與 Power BI 自己用 DAX 算出的結果對帳（**9,876 個數字，0 個不一致**） |
+| 7. 任何 .pbix | `python -m analysis import-pbix 檔案.pbix --name X`：模型從 Power BI Desktop 開啟檔案時的背景引擎讀（DMV）、頁面從 .pbix 本身讀、資料用 DAX 取（所以任何資料來源都可以），並依資料推出分析設定草稿。用零售 .pbix、完全不手動調整：快照與直接讀 Oracle 完全相同（**544,515 個值，0 個不一致**），埋入事件全數找到，問答 **10/11** 正確，沒有錯誤回答通過查核 |
 
 範例（`python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`）：
 
@@ -112,6 +113,7 @@ $env:PBI_DATASET = "superstore"
 - [docs/analysis.md](docs/analysis.md)：分析引擎如何讀取模型、偵測變化、選出能解釋變化的範圍
 - [docs/agent.md](docs/agent.md)：MCP 工具、數字查核、問答評分
 - [docs/report-server.md](docs/report-server.md)：Report Server 安裝，以及 PBIR 格式的陷阱
+- [docs/pbix-import.md](docs/pbix-import.md)：直接從 .pbix 匯入報表
 - [docs/excel-dataset.md](docs/excel-dataset.md)：Excel 報表：小量資料的校準、偵測結果、對帳
 
 ## 限制

@@ -275,6 +275,14 @@ def ident(name: str) -> str:
     return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$#]*", name) else '"' + name.replace('"', '""') + '"'
 
 
+def dax_table(name: str) -> str:
+    return "'" + name.replace("'", "''") + "'"
+
+
+def dax_col(table: str, column: str) -> str:
+    return f"{dax_table(table)}[{column.replace(']', ']]')}]"
+
+
 def safe_name(name: str) -> str:
     """Column name usable as a Python identifier in formula expressions ("Order ID" → Order_ID)."""
     return re.sub(r"\W+", "_", name).strip("_")
@@ -289,10 +297,11 @@ class Unsupported(Exception):
 
 @dataclass
 class Base:
-    """An aggregate computed in SQL over the fact table."""
+    """An aggregate over the fact table, in SQL (for the source database) and DAX (for the Power BI engine)."""
     name: str
     sql: str            # aggregate over fact alias f, e.g. SUM(f.SALES_AMOUNT)
     distinct_of: str | None = None  # column for COUNT(DISTINCT ...), not additive across all grains
+    dax: str = ""       # the same aggregate in DAX, e.g. SUM('FACT_SALES'[SALES_AMOUNT])
 
 
 @dataclass
@@ -338,14 +347,15 @@ class Translator:
         self.formulas: dict[str, Formula] = {}
 
     def _col(self, ref: str) -> tuple[str, str]:
+        """(DAX reference, source column) of a fact column."""
         m = re.match(r"('(?:[^']|'')*'|[A-Za-z_]\w*)\s*\[([^\]]+)\]", ref)
         table, col = unquote(m.group(1)), m.group(2)
         if table != self.fact:
             raise Unsupported(f"column {table}[{col}] is not on the fact table")
-        return table, self.model.tables[table].columns[col].source_column
+        return dax_col(table, col), self.model.tables[table].columns[col].source_column or col
 
-    def _base(self, name: str, sql: str, distinct_of: str | None = None) -> str:
-        self.bases.setdefault(name, Base(name, sql, distinct_of))
+    def _base(self, name: str, sql: str, distinct_of: str | None = None, dax: str = "") -> str:
+        self.bases.setdefault(name, Base(name, sql, distinct_of, dax))
         return name
 
     def translate(self, measure: str) -> Formula:
@@ -418,12 +428,13 @@ class Translator:
         self.i += 1
         self._take("op", "(")
         if fn in ("SUM", "DISTINCTCOUNT"):
-            _, col = self._col(self._take("colref")[1])
+            ref, col = self._col(self._take("colref")[1])
             self._take("op", ")")
             if fn == "SUM":
-                name = self._base(f"sum_{safe_name(col)}", f"SUM(f.{ident(col)})")
+                name = self._base(f"sum_{safe_name(col)}", f"SUM(f.{ident(col)})", dax=f"SUM({ref})")
             else:
-                name = self._base(f"dc_{safe_name(col)}", f"COUNT(DISTINCT f.{ident(col)})", distinct_of=col)
+                name = self._base(f"dc_{safe_name(col)}", f"COUNT(DISTINCT f.{ident(col)})", distinct_of=col,
+                                  dax=f"DISTINCTCOUNT({ref})")
             self.used.append(name)
             return name
         if fn == "COUNTROWS":
@@ -431,17 +442,17 @@ class Translator:
             self._take("op", ")")
             if table != self.fact:
                 raise Unsupported("COUNTROWS on non-fact table")
-            self.used.append(self._base("rows", "COUNT(*)"))
+            self.used.append(self._base("rows", "COUNT(*)", dax=f"COUNTROWS({dax_table(table)})"))
             return "rows"
         if fn == "SUMX":
             table = unquote(self._take()[1])
             self._take("op", ",")
             if table != self.fact:
                 raise Unsupported("SUMX over non-fact table")
-            sql = self._row_expr()
+            sql, dax = self._row_expr()
             self._take("op", ")")
             key = "sumx_" + safe_name(sql.replace("f.", "").replace('"', ""))
-            self.used.append(self._base(key, f"SUM({sql})"))
+            self.used.append(self._base(key, f"SUM({sql})", dax=f"SUMX({dax_table(table)}, {dax})"))
             return key
         if fn == "DIVIDE":
             num = self._expr()
@@ -453,16 +464,22 @@ class Translator:
             return f"div({num}, {den})"
         raise Unsupported(f"function {fn} not supported")
 
-    def _row_expr(self) -> str:
-        """Row-level arithmetic over fact columns inside SUMX, rendered as SQL."""
-        parts = []
+    def _row_expr(self) -> tuple[str, str]:
+        """Row-level arithmetic over fact columns inside SUMX, rendered as SQL and as DAX."""
+        parts, dax = [], []
         while self._peek()[0] in ("colref", "op", "num") and self._peek() != ("op", ",") \
                 and not (self._peek() == ("op", ")") and parts.count("(") <= parts.count(")")):
             kind, val = self._take()
-            parts.append(f"f.{ident(self._col(val)[1])}" if kind == "colref" else val)
+            if kind == "colref":
+                ref, col = self._col(val)
+                parts.append(f"f.{ident(col)}")
+                dax.append(ref)
+            else:
+                parts.append(val)
+                dax.append(val)
         if not parts:
             raise Unsupported("empty SUMX expression")
-        return " ".join(parts)
+        return " ".join(parts), " ".join(dax)
 
 
 def translate_all(model: SemanticModel, fact: str) -> tuple[dict[str, Formula], dict[str, Base], dict[str, str]]:

@@ -1,0 +1,76 @@
+/// 日期維度（已標記為日期資料表）
+table DIM_DATE
+
+	/// nan
+	column DATE_KEY
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: DATE_KEY
+
+	/// 日期
+	column FULL_DATE
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		sourceColumn: FULL_DATE
+
+	/// 年
+	column YEAR_NUM
+		dataType: int64
+		formatString: 0
+		sourceColumn: YEAR_NUM
+
+	/// 季
+	column QUARTER_NUM
+		dataType: int64
+		formatString: 0
+		sourceColumn: QUARTER_NUM
+
+	/// 月
+	column MONTH_NUM
+		dataType: int64
+		formatString: 0
+		sourceColumn: MONTH_NUM
+
+	/// 年月，例如 2026-10
+	column YEAR_MONTH
+		dataType: string
+		formatString: nan
+		sourceColumn: YEAR_MONTH
+
+	/// ISO 週次
+	column ISO_WEEK
+		dataType: int64
+		formatString: 0
+		sourceColumn: ISO_WEEK
+
+	/// 星期幾（1=週一）
+	column DAY_OF_WEEK
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: DAY_OF_WEEK
+
+	/// 星期名稱
+	column WEEKDAY_NAME
+		dataType: string
+		formatString: nan
+		sourceColumn: WEEKDAY_NAME
+
+	/// 是否為週末 Y/N
+	column IS_WEEKEND
+		dataType: string
+		formatString: nan
+		sourceColumn: IS_WEEKEND
+
+	/// 節日或促銷檔期名稱
+	column HOLIDAY_NAME
+		dataType: string
+		formatString: nan
+		sourceColumn: HOLIDAY_NAME
+
+	partition DIM_DATE = m
+		mode: import
+		source =
+				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "DIM_DATE"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"DATE_KEY", Int64.Type},         {"FULL_DATE", type date},         {"YEAR_NUM", Int64.Type},         {"QUARTER_NUM", Int64.Type},         {"MONTH_NUM", Int64.Type},         {"YEAR_MONTH", type text},         {"ISO_WEEK", Int64.Type},         {"DAY_OF_WEEK", Int64.Type},         {"WEEKDAY_NAME", type text},         {"IS_WEEKEND", type text},         {"HOLIDAY_NAME", type text}     }) in     Typed
+

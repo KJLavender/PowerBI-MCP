@@ -1,0 +1,64 @@
+/// 門市。線上訂單依顧客所在區域歸屬到門市
+table DIM_STORE
+
+	/// nan
+	column STORE_ID
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: STORE_ID
+
+	/// 門市代碼
+	column STORE_CODE
+		dataType: string
+		formatString: nan
+		sourceColumn: STORE_CODE
+
+	/// 門市名稱
+	column STORE_NAME
+		dataType: string
+		formatString: nan
+		sourceColumn: STORE_NAME
+
+	/// 縣市
+	column CITY
+		dataType: string
+		formatString: nan
+		sourceColumn: CITY
+
+	/// nan
+	column REGION_CODE
+		dataType: string
+		isHidden
+		formatString: nan
+		sourceColumn: REGION_CODE
+
+	/// 區域：北區 / 中區 / 南區 / 東區
+	column REGION_NAME
+		dataType: string
+		formatString: nan
+		sourceColumn: REGION_NAME
+
+	/// 店型：旗艦店 / 標準店 / 社區店
+	column STORE_TYPE
+		dataType: string
+		formatString: nan
+		sourceColumn: STORE_TYPE
+
+	/// 賣場坪數
+	column FLOOR_AREA_PING
+		dataType: int64
+		formatString: #,##0
+		sourceColumn: FLOOR_AREA_PING
+
+	/// 開幕日
+	column OPEN_DATE
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		sourceColumn: OPEN_DATE
+
+	partition DIM_STORE = m
+		mode: import
+		source =
+				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "DIM_STORE"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"STORE_ID", Int64.Type},         {"STORE_CODE", type text},         {"STORE_NAME", type text},         {"CITY", type text},         {"REGION_CODE", type text},         {"REGION_NAME", type text},         {"STORE_TYPE", type text},         {"FLOOR_AREA_PING", Int64.Type},         {"OPEN_DATE", type date}     }) in     Typed
+

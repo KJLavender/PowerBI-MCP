@@ -11,38 +11,16 @@ It checks the part an LLM cannot: that the DAX → formula translation, the rela
 snapshots reproduce the report's numbers. Open the dataset's report in Power BI Desktop (and refresh it)
 before running; dates after Power BI's last refresh are skipped.
 """
-import json
 import random
-import subprocess
 from datetime import date, timedelta
 
 import numpy as np
 
 from . import store
 from .context import Context, load
-from .dataset import REPORT_DIR, ROOT
+from .dataset import REPORT_DIR
 from .engine import Engine, evaluate
-
-SCRIPT = ROOT / "scripts" / "pbi-dax.ps1"
-
-
-def ps(*args: str, stdin: str = "") -> str:
-    out = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(SCRIPT), *args],
-                         input=stdin.encode("utf-8"), capture_output=True, timeout=600)
-    if out.returncode:
-        raise RuntimeError(out.stderr.decode("utf-8", "replace"))
-    return out.stdout.decode("utf-8-sig")
-
-
-def engines() -> list[dict]:
-    return json.loads(ps("-List") or "[]")
-
-
-def run_dax(port: int, queries: list[str]) -> list[dict]:
-    # ASCII-only JSON: Windows PowerShell reads stdin in the console code page
-    res = json.loads(ps("-Port", str(port), stdin=json.dumps(queries)))
-    return res if isinstance(res, list) else [res]
-
+from .pbi import engines, run_dax
 
 def dax_name(table: str) -> str:
     return "'" + table.replace("'", "''") + "'"

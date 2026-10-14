@@ -1,0 +1,182 @@
+/// 銷售明細（訂單明細層級，一列 = 一筆訂單中的一項商品）
+table FACT_SALES
+
+	/// 折扣後淨銷售額
+	measure '銷售額' = SUM ( FACT_SALES[SALES_AMOUNT] )
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 銷貨成本
+	measure '成本' = SUM ( FACT_SALES[COST_AMOUNT] )
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 銷售額 − 成本
+	measure '毛利' = [銷售額] - [成本]
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 毛利 ÷ 銷售額
+	measure '毛利率' = DIVIDE ( [毛利], [銷售額] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 基本指標
+
+	/// 不重複訂單數（來客數）
+	measure '訂單數' = DISTINCTCOUNT ( FACT_SALES[ORDER_ID] )
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 商品銷售件數
+	measure '銷售數量' = SUM ( FACT_SALES[QUANTITY] )
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 平均每筆訂單銷售額 = 銷售額 ÷ 訂單數
+	measure '客單價' = DIVIDE ( [銷售額], [訂單數] )
+		formatString: #,##0.0
+		displayFolder: 基本指標
+
+	/// 折扣前平均每件售價
+	measure '平均成交單價' = DIVIDE ( SUMX ( FACT_SALES, FACT_SALES[UNIT_PRICE] * FACT_SALES[QUANTITY] ), [銷售數量] )
+		formatString: #,##0.0
+		displayFolder: 基本指標
+
+	/// 折扣總額
+	measure '折扣金額' = SUM ( FACT_SALES[DISCOUNT_AMOUNT] )
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 折扣金額 ÷ 折扣前金額
+	measure '折扣率' = DIVIDE ( [折扣金額], [銷售額] + [折扣金額] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 基本指標
+
+	/// 有消費的不重複會員數（不含非會員）
+	measure '購買會員數' = CALCULATE ( DISTINCTCOUNT ( FACT_SALES[CUSTOMER_ID] ), DIM_CUSTOMER[SEGMENT] <> "非會員" )
+		formatString: #,##0
+		displayFolder: 基本指標
+
+	/// 前一天的銷售額
+	measure '銷售額 前一日' = CALCULATE ( [銷售額], DATEADD ( DIM_DATE[FULL_DATE], -1, DAY ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+
+	/// 7 天前的銷售額（同星期比較）
+	measure '銷售額 上週同日' = CALCULATE ( [銷售額], DATEADD ( DIM_DATE[FULL_DATE], -7, DAY ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+
+	/// 與上週同日相比的變動率
+	measure '銷售額 週變動%' = DIVIDE ( [銷售額] - [銷售額 上週同日], [銷售額 上週同日] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 時間比較
+
+	/// 去年同期銷售額
+	measure '銷售額 去年同期' = CALCULATE ( [銷售額], SAMEPERIODLASTYEAR ( DIM_DATE[FULL_DATE] ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+
+	/// 年增率
+	measure '銷售額 YoY%' = DIVIDE ( [銷售額] - [銷售額 去年同期], [銷售額 去年同期] )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 時間比較
+
+	/// 本月累計銷售額
+	measure '銷售額 MTD' = TOTALMTD ( [銷售額], DIM_DATE[FULL_DATE] )
+		formatString: #,##0
+		displayFolder: 時間比較
+
+	/// 7 天前的毛利率
+	measure '毛利率 上週同日' = CALCULATE ( [毛利率], DATEADD ( DIM_DATE[FULL_DATE], -7, DAY ) )
+		formatString: 0.0%;-0.0%;0.0%
+		displayFolder: 時間比較
+
+	/// 7 天前的訂單數
+	measure '訂單數 上週同日' = CALCULATE ( [訂單數], DATEADD ( DIM_DATE[FULL_DATE], -7, DAY ) )
+		formatString: #,##0
+		displayFolder: 時間比較
+
+	/// 訂單編號
+	column ORDER_ID
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: ORDER_ID
+
+	/// nan
+	column LINE_NO
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: LINE_NO
+
+	/// nan
+	column DATE_KEY
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: DATE_KEY
+
+	/// nan
+	column STORE_ID
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: STORE_ID
+
+	/// nan
+	column CHANNEL_ID
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: CHANNEL_ID
+
+	/// nan
+	column PRODUCT_ID
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: PRODUCT_ID
+
+	/// nan
+	column CUSTOMER_ID
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: CUSTOMER_ID
+
+	/// 銷售數量
+	column QUANTITY
+		dataType: int64
+		formatString: #,##0
+		sourceColumn: QUANTITY
+
+	/// 成交單價（未扣折扣）
+	column UNIT_PRICE
+		dataType: decimal
+		formatString: #,##0
+		sourceColumn: UNIT_PRICE
+
+	/// 整行折扣金額
+	column DISCOUNT_AMOUNT
+		dataType: decimal
+		formatString: #,##0
+		sourceColumn: DISCOUNT_AMOUNT
+
+	/// 折扣後淨銷售額 = 數量 × 單價 − 折扣
+	column SALES_AMOUNT
+		dataType: decimal
+		formatString: #,##0
+		sourceColumn: SALES_AMOUNT
+
+	/// 銷貨成本
+	column COST_AMOUNT
+		dataType: decimal
+		formatString: #,##0
+		sourceColumn: COST_AMOUNT
+
+	partition FACT_SALES = m
+		mode: import
+		source =
+				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "FACT_SALES"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"ORDER_ID", Int64.Type},         {"LINE_NO", Int64.Type},         {"DATE_KEY", Int64.Type},         {"STORE_ID", Int64.Type},         {"CHANNEL_ID", Int64.Type},         {"PRODUCT_ID", Int64.Type},         {"CUSTOMER_ID", Int64.Type},         {"QUANTITY", Int64.Type},         {"UNIT_PRICE", Currency.Type},         {"DISCOUNT_AMOUNT", Currency.Type},         {"SALES_AMOUNT", Currency.Type},         {"COST_AMOUNT", Currency.Type}     }) in     Typed
+

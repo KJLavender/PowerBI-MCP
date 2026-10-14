@@ -1,0 +1,102 @@
+# 由 python -m analysis import-pbix 自動產生的分析設定草稿（2026-10-14）。
+# 依資料推斷，請檢查：維度與標籤、階層（parent）、指標角色（roles）、門檻（用沒有事件的歷史資料校準）。
+#   - 事實表：FACT_SALES（多對一關聯 5 條、量值 19 個）
+#   - 日期：DIM_DATE[FULL_DATE]
+#   - 資料量：平均每天 4,271 列明細
+#   - 維度候選（成員數）：STORE_NAME(25)、CITY(17)、REGION_NAME(4)、STORE_TYPE(3)、CHANNEL_NAME(3)、CHANNEL_TYPE(2)、PRODUCT_NAME(48)、CATEGORY(6)、BRAND(28)、SEGMENT(3)、GENDER(4)、AGE_GROUP(6)、HOME_REGION_NAME(4)
+#   - 指標角色：sales=銷售額、volume=銷售數量、orders=訂單數、unit_price=平均成交單價、discount_rate=折扣率、margin_rate=毛利率
+#   - 資料品質檢查單位：門市名稱（某天明細筆數突然低於平常一半時提示可能是資料缺漏）
+
+description: RetailSales_RS（由 .pbix 匯入，資料從開啟中的 Power BI 報表讀取）
+source:
+  kind: powerbi
+  title: RetailSales_RS
+fact: FACT_SALES
+date: DIM_DATE.FULL_DATE
+dimensions:
+  store_name:
+    label: 門市名稱
+    column: DIM_STORE.STORE_NAME
+    parent: city
+  city:
+    label: 縣市
+    column: DIM_STORE.CITY
+    parent: region_name
+  region_name:
+    label: 區域
+    column: DIM_STORE.REGION_NAME
+  store_type:
+    label: 店型
+    column: DIM_STORE.STORE_TYPE
+  channel_name:
+    label: 通路
+    column: DIM_CHANNEL.CHANNEL_NAME
+    parent: channel_type
+  channel_type:
+    label: 實體 / 線上
+    column: DIM_CHANNEL.CHANNEL_TYPE
+  product_name:
+    label: 商品名稱
+    column: DIM_PRODUCT.PRODUCT_NAME
+    parent: brand
+  category:
+    label: 商品大類
+    column: DIM_PRODUCT.CATEGORY
+  brand:
+    label: 品牌
+    column: DIM_PRODUCT.BRAND
+  segment:
+    label: 顧客分群
+    column: DIM_CUSTOMER.SEGMENT
+  gender:
+    label: 性別
+    column: DIM_CUSTOMER.GENDER
+  age_group:
+    label: 年齡層
+    column: DIM_CUSTOMER.AGE_GROUP
+  home_region_name:
+    label: 會員居住區域
+    column: DIM_CUSTOMER.HOME_REGION_NAME
+combinations:
+- - region_name
+  - store_type
+- - region_name
+  - channel_type
+- - region_name
+  - category
+- - store_type
+  - channel_type
+windows:
+  day:
+    days: 1
+    label: 單日
+  week:
+    days: 7
+    label: 近 7 日
+  month:
+    days: 28
+    label: 近 28 日
+  year:
+    days: 28
+    label: 近 28 日 vs 去年同期
+    mode: yoy
+roles:
+  sales: 銷售額
+  volume: 銷售數量
+  orders: 訂單數
+  unit_price: 平均成交單價
+  discount_rate: 折扣率
+  margin_rate: 毛利率
+thresholds:
+  history_days: 182
+  z_alert: 3.0
+  z_alert_member: 4.0
+  min_change_pct: 0.05
+  min_share: 0.01
+  min_ratio_change: 0.01
+  max_findings: 8
+  repeat_days: 14
+price_item: product_name
+data_quality:
+  unit: store_name
+holiday: DIM_DATE.HOLIDAY_NAME

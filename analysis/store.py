@@ -126,6 +126,8 @@ def _calendar(ctx: Context, conn, d0: date, d1: date) -> pd.DataFrame:
 
 
 def snapshot(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
+    if ctx.source["kind"] == "powerbi":
+        return snapshot_from_powerbi(ctx, d0, d1, verbose)
     additive = [b for b, v in ctx.bases.items() if not v.distinct_of]
     with sources.connect(ctx) as conn, open_db() as db:
         order_dims = order_level_dims(ctx, conn, d1)
@@ -154,6 +156,39 @@ def snapshot(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
             _replace(db, "snapshot_log", log, start, end)
             if verbose:
                 print(f"  snapshot {start} .. {end}: {len(lines):,} line rows, {len(orders):,} order rows",
+                      flush=True)
+            start = end + timedelta(days=1)
+        db.execute("CREATE OR REPLACE TABLE meta AS SELECT ? AS order_dims, ? AS updated_at",
+                   [",".join(order_dims), datetime.now()])
+
+
+def snapshot_from_powerbi(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
+    """Same snapshots, but the aggregates come from the open Power BI report (DAX) instead of the source DB."""
+    src = sources.PowerBISource(ctx)
+    additive = [b for b, v in ctx.bases.items() if not v.distinct_of]
+    with open_db() as db:
+        order_dims = src.order_level_dims(d1)
+        start = d0
+        while start <= d1:
+            end = min(d1, (start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1))
+            lines = src.grouped(list(ctx.dims), additive, start, end)
+            orders = src.grouped(order_dims, list(ctx.bases), start, end)
+            _replace(db, "line_snap", lines, start, end)
+            _replace(db, "order_snap", orders, start, end)
+            etl = src.etl(start, end)
+            if etl is not None:
+                _replace(db, "etl_log", etl, start, end)
+            cal = src.calendar(start, end)
+            cal["holiday"] = cal["holiday"].astype("object")
+            _replace(db, "calendar", cal, start, end)
+            log = (orders.groupby("business_date")["rows"].sum().rename("fact_rows").reset_index()
+                   if not orders.empty else pd.DataFrame(columns=["business_date", "fact_rows"]))
+            days = pd.DataFrame({"business_date": [start + timedelta(days=i) for i in range((end - start).days + 1)]})
+            log = days.merge(log, on="business_date", how="left").fillna({"fact_rows": 0})
+            log["taken_at"] = datetime.now()
+            _replace(db, "snapshot_log", log, start, end)
+            if verbose:
+                print(f"  snapshot {start} .. {end} (Power BI): {len(lines):,} line rows, {len(orders):,} order rows",
                       flush=True)
             start = end + timedelta(days=1)
         db.execute("CREATE OR REPLACE TABLE meta AS SELECT ? AS order_dims, ? AS updated_at",

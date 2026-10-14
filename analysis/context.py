@@ -57,7 +57,8 @@ class Context:
 
     @cached_property
     def source(self) -> dict:
-        return self.model.tables[self.fact].source or {"kind": "oracle"}
+        """Where snapshots read from: the config's `source` (e.g. the Power BI engine), else the model's partitions."""
+        return self.config.get("source") or self.model.tables[self.fact].source or {"kind": "oracle"}
 
     @cached_property
     def metrics(self) -> list[str]:
@@ -116,5 +117,5 @@ def load(config_path: Path = dataset.CONFIG) -> Context:
     date_dim = Dimension("business_date", "日期", table, column, source, None, path)
     holiday_source = _resolve(model, fact, config["holiday"])[2] if config.get("holiday") else None
     formulas, bases, skipped = semantic.translate_all(model, fact)
-    bases.setdefault("rows", Base("rows", "COUNT(*)"))
+    bases.setdefault("rows", Base("rows", "COUNT(*)", dax=f"COUNTROWS({semantic.dax_table(fact)})"))
     return Context(model, config, fact, dims, formulas, bases, skipped, date_dim, holiday_source)

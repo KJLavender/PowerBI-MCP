@@ -25,7 +25,7 @@ def run(ctx: Context, d: date, engine: Engine | None = None) -> dict:
     """Run the engine for d, warming up the 'already reported' memory on the preceding days."""
     engine = engine or Engine(ctx)
     if not engine.reported:
-        for i in range(ctx.config["thresholds"]["repeat_days"], 0, -1):
+        for i in range(engine.th["repeat_days"], 0, -1):
             engine.run(d - timedelta(days=i))
     result = engine.run(d)
     result["engine"] = engine
@@ -167,7 +167,7 @@ class Writer:
 
         self.w("## 6. 判斷方式與指標定義", "",
                "- **顯著**：變化量與該序列自身過去半年的正常波動相比，超過門檻個標準差（z 值；整體 ≥ "
-               f"{self.ctx.config['thresholds']['z_alert']}，維度成員 ≥ {self.ctx.config['thresholds']['z_alert_member']}），"
+               f"{self.e.th['z_alert']}，維度成員 ≥ {self.e.th['z_alert_member']}），"
                "且幅度夠大。7 日與 28 日的比較已扣除去年同期的季節性變化。",
                "- **範圍取捨**：若「A × B」的變化扣除後，B 的其餘部分都沒有變化，就只報告 A × B；"
                "若其他成員也同向變動，則報告較大的範圍。", "")

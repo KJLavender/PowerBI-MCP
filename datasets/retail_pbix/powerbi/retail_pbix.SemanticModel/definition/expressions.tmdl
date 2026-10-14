@@ -1,0 +1,3 @@
+expression OracleServer = "127.0.0.1:1521/FREEPDB1" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+
+expression OracleSchema = "SALES_DW" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]

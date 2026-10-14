@@ -6,6 +6,7 @@
   python -m analysis evaluate [--start D] [--end D]   score against scenarios/scenarios.yaml
   python -m analysis model                            show what was read from the Power BI project
   python -m analysis reconcile [--port P]             compare with the numbers Power BI Desktop computes (DAX)
+  python -m analysis import-pbix FILE.pbix --name N   new dataset from a .pbix (model read from Power BI Desktop)
 
 The report analysed is chosen with PBI_DATASET (default: retail; e.g. PBI_DATASET=superstore).
 """
@@ -96,6 +97,12 @@ def main() -> None:
     s.add_argument("--end", type=date.fromisoformat)
     s.set_defaults(func=cmd_evaluate)
     sub.add_parser("model").set_defaults(func=cmd_model)
+    s = sub.add_parser("import-pbix", help="read a report from a .pbix / an open Power BI Desktop report")
+    s.add_argument("file", nargs="?")
+    s.add_argument("--name", required=True)
+    s.add_argument("--port", type=int)
+    s.add_argument("--title")
+    s.set_defaults(func=lambda a: __import__("analysis.pbix", fromlist=["main"]).main(a.file, a.name, a.port, a.title))
     s = sub.add_parser("reconcile")
     s.add_argument("--port", type=int)
     s.add_argument("--samples", type=int, default=6)

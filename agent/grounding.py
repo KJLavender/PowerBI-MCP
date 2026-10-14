@@ -149,9 +149,9 @@ class Vocabulary:
     def __init__(self, metrics: list[str], members: dict[str, list[str]], alias: dict[str, str] | None = None):
         self.alias = {w: m for w, m in (alias or {}).items() if m in metrics and w not in metrics}
         names = [(m, "metric", "") for m in metrics] + [(w, "metric", "") for w in self.alias]
-        # a member spelled like a dimension (channel "門市" vs the store dimension "門市") is ambiguous: skip it
+        # a member spelled like (part of) a dimension label (channel "門市" vs "門市名稱") is ambiguous: skip it
         names += [(m, "member", dim) for dim, ms in members.items() for m in ms
-                  if m and m not in members and m not in metrics]
+                  if m and not any(m in label for label in members) and m not in metrics]
         names.sort(key=lambda x: -len(x[0]))
         # keyed without spaces: "3C 配件" and "3C配件", "Asia  Pacific" and "Asia Pacific" are the same name
         self.kind = {squash(n): (n, k, d) for n, k, d in reversed(names)}

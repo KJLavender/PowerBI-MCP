@@ -1,0 +1,49 @@
+/// ETL 每日批次紀錄：每個營業日載入的筆數與狀態
+table ETL_BATCH_LOG
+
+	/// ETL 批次回報的載入筆數
+	measure 'ETL 載入筆數' = SUM ( ETL_BATCH_LOG[ROWS_LOADED] )
+		formatString: #,##0
+		displayFolder: 資料品質
+
+	/// FACT_SALES 實際列數，可與 ETL 載入筆數比對
+	measure '實際明細筆數' = COUNTROWS ( FACT_SALES )
+		formatString: #,##0
+		displayFolder: 資料品質
+
+	/// nan
+	column BUSINESS_DATE_KEY
+		dataType: int64
+		isHidden
+		formatString: nan
+		sourceColumn: BUSINESS_DATE_KEY
+
+	/// 批次執行時間
+	column RUN_AT
+		dataType: dateTime
+		formatString: yyyy-mm-dd hh:nn
+		sourceColumn: RUN_AT
+
+	/// ETL 回報的載入筆數
+	column ROWS_LOADED
+		dataType: int64
+		formatString: #,##0
+		sourceColumn: ROWS_LOADED
+
+	/// 批次狀態
+	column STATUS
+		dataType: string
+		formatString: nan
+		sourceColumn: STATUS
+
+	/// 批次訊息
+	column MESSAGE
+		dataType: string
+		formatString: nan
+		sourceColumn: MESSAGE
+
+	partition ETL_BATCH_LOG = m
+		mode: import
+		source =
+				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "ETL_BATCH_LOG"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"BUSINESS_DATE_KEY", Int64.Type},         {"RUN_AT", type datetime},         {"ROWS_LOADED", Int64.Type},         {"STATUS", type text},         {"MESSAGE", type text}     }) in     Typed
+

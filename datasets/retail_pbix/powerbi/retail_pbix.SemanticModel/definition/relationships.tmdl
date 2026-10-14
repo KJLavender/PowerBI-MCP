@@ -1,0 +1,23 @@
+relationship r0
+	fromColumn: FACT_SALES.DATE_KEY
+	toColumn: DIM_DATE.DATE_KEY
+
+relationship r1
+	fromColumn: FACT_SALES.STORE_ID
+	toColumn: DIM_STORE.STORE_ID
+
+relationship r2
+	fromColumn: FACT_SALES.CHANNEL_ID
+	toColumn: DIM_CHANNEL.CHANNEL_ID
+
+relationship r3
+	fromColumn: FACT_SALES.PRODUCT_ID
+	toColumn: DIM_PRODUCT.PRODUCT_ID
+
+relationship r4
+	fromColumn: FACT_SALES.CUSTOMER_ID
+	toColumn: DIM_CUSTOMER.CUSTOMER_ID
+
+relationship r5
+	fromColumn: ETL_BATCH_LOG.BUSINESS_DATE_KEY
+	toColumn: DIM_DATE.DATE_KEY

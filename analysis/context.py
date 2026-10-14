@@ -41,6 +41,7 @@ class Context:
     date_dim: Dimension
     holiday_source: str | None
     warnings: list[str] = field(default_factory=list)
+    report_filters: list[tuple] = field(default_factory=list)  # report-level filters applied to every snapshot
 
     @cached_property
     def roles(self) -> dict:
@@ -118,4 +119,13 @@ def load(config_path: Path = dataset.CONFIG) -> Context:
     holiday_source = _resolve(model, fact, config["holiday"])[2] if config.get("holiday") else None
     formulas, bases, skipped = semantic.translate_all(model, fact)
     bases.setdefault("rows", Base("rows", "COUNT(*)", dax=f"COUNTROWS({semantic.dax_table(fact)})"))
-    return Context(model, config, fact, dims, formulas, bases, skipped, date_dim, holiday_source)
+    ctx = Context(model, config, fact, dims, formulas, bases, skipped, date_dim, holiday_source)
+    for c in model.report_filters:
+        try:
+            if c[0] != fact:
+                model.join_path(fact, c[0])
+            ctx.report_filters.append(c)
+        except ValueError:
+            ctx.warnings.append(f"報表篩選 {semantic.describe_filter(c)} 的資料表與事實表沒有多對一關聯，無法套用")
+    ctx.warnings += [f"報表篩選無法解讀：{n}" for n in model.filter_notes]
+    return ctx

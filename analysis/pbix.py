@@ -163,14 +163,16 @@ def write_report(pbix: Path | None, out: Path) -> int:
                     target.write_bytes(z.read(n))
             return sum(1 for n in names if n.endswith("/visual.json"))
         layout = json.loads(z.read("Report/Layout").decode("utf-16-le"))
+    filters = lambda obj: {"filterConfig": {"filters": json.loads(obj.get("filters") or "[]")}}  # noqa: E731
+    (out / "definition" / "report.json").write_text(json.dumps(filters(layout), ensure_ascii=False), encoding="utf-8")
     order, count = [], 0
     for sec in layout.get("sections", []):
         name = re.sub(r"\W", "_", sec.get("name") or f"page{len(order)}")
         order.append(name)
         pdir = pages_dir / name
         pdir.mkdir(parents=True, exist_ok=True)
-        (pdir / "page.json").write_text(json.dumps({"name": name, "displayName": sec.get("displayName", name)},
-                                                   ensure_ascii=False), encoding="utf-8")
+        (pdir / "page.json").write_text(json.dumps({"name": name, "displayName": sec.get("displayName", name),
+                                                    **filters(sec)}, ensure_ascii=False), encoding="utf-8")
         for i, vc in enumerate(sec.get("visualContainers", [])):
             cfg = json.loads(vc.get("config") or "{}")
             sv = cfg.get("singleVisual") or {}
@@ -193,7 +195,7 @@ def write_report(pbix: Path | None, out: Path) -> int:
                 lit = t.get("properties", {}).get("text", {}).get("expr", {}).get("Literal", {})
                 title = lit.get("Value", "")
             visual = {"name": cfg.get("name", f"v{i}"), "visual": {"visualType": sv.get("visualType", ""),
-                      "query": {"queryState": {"Values": {"projections": fields}}}}}
+                      "query": {"queryState": {"Values": {"projections": fields}}}}, **filters(vc)}
             if title:
                 visual["visual"]["visualContainerObjects"] = {"title": [{"properties": {"text": {"expr": {
                     "Literal": {"Value": title}}}}}]}

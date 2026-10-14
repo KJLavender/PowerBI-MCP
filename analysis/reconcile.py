@@ -18,9 +18,10 @@ import numpy as np
 
 from . import store
 from .context import Context, load
-from .dataset import REPORT_DIR
+from .dataset import PBIP_DIR, REPORT_DIR
 from .engine import Engine, evaluate
 from .pbi import engines, run_dax
+from .sources import report_filter_dax
 
 def dax_name(table: str) -> str:
     return "'" + table.replace("'", "''") + "'"
@@ -67,8 +68,8 @@ def run(ctx: Context, port: int, samples: int = 6, seed: int = 11) -> dict:
                         checks.append({"date": d, "days": span, "scope": dict(zip(dims, cube.members[i])),
                                        "engine": values, "query": len(queries)})
                     group = ", ".join(col(ctx.dims[k].table, ctx.dims[k].column) for k in dims)
-                    filt = f"FILTER(ALL({date_col}), {date_col} >= DATE({d0.year},{d0.month},{d0.day}) && " \
-                           f"{date_col} <= DATE({d.year},{d.month},{d.day}))"
+                    filt = ", ".join([f"FILTER(ALL({date_col}), {date_col} >= DATE({d0.year},{d0.month},{d0.day}) && "
+                                      f"{date_col} <= DATE({d.year},{d.month},{d.day}))"] + report_filter_dax(ctx))
                     cols = ", ".join(f'"{m}", [{m}]' for m in usable)
                     queries.append((dims, usable, f"EVALUATE SUMMARIZECOLUMNS({group + ', ' if group else ''}{filt}, {cols})"))
     answers = run_dax(port, [q for _, _, q in queries])
@@ -82,7 +83,8 @@ def run(ctx: Context, port: int, samples: int = 6, seed: int = 11) -> dict:
         want = tuple(c["scope"][k] for k in dims)
         row = next((r for r in res["rows"] if tuple(r[:len(dims)]) == want), None)
         for j, m in enumerate(usable):
-            pbi = None if row is None or row[len(dims) + j] is None else float(row[len(dims) + j])
+            cell = None if row is None else row[len(dims) + j]
+            pbi = None if cell in (None, "") else float(cell)  # BLANK
             ours = c["engine"][m]
             compared += 1
             same = (pbi is None and (ours == 0 or ours != ours)) or \
@@ -116,9 +118,12 @@ def main(port: int | None, samples: int) -> None:
     ctx = load()
     found = engines()
     if port is None:
-        if not found:
-            raise SystemExit("找不到執行中的 Power BI Desktop：請先開啟這份報表並重新整理")
-        port = found[0]["port"]
+        # the open report of this dataset: the configured window title, else the Power BI project's name
+        names = [ctx.source.get("title")] + [d.name.split(".")[0] for d in PBIP_DIR.glob("*.SemanticModel")]
+        match = [e for e in found for n in names if n and (e.get("title") or "").startswith(n)]
+        if not match:
+            raise SystemExit("找不到開啟中的這份報表：請先在 Power BI Desktop 開啟並重新整理")
+        port = match[0]["port"]
     title = next((e["title"] for e in found if e["port"] == port), f"port {port}")
     r = run(ctx, port, samples)
     text = render(ctx, r, title)

@@ -6,6 +6,7 @@ Two grains are kept:
 A dimension is "order-level" when every distinct-count key (ORDER_ID) maps to one value of it —
 checked against the data, not assumed.
 """
+import re
 from datetime import date, datetime, timedelta
 
 import duckdb
@@ -13,7 +14,7 @@ import pandas as pd
 
 from . import sources
 from .context import DATA_DIR, Context
-from .semantic import ident
+from .semantic import cond_sql, ident
 
 DB_PATH = DATA_DIR / "analysis.duckdb"
 BLANK = "(空白)"  # fact rows without a matching dimension row, like Power BI's blank member
@@ -42,27 +43,40 @@ def _from_clause(ctx: Context, dims) -> tuple[str, dict[str, str]]:
     return sql, aliases
 
 
+class _Path:
+    """A table the query must join only for a CALCULATE filter (not grouped by)."""
+    def __init__(self, path):
+        self.path = path
+
+
 def _grouped_sql(ctx: Context, dim_keys: list[str], bases: list[str]) -> str:
     dims = [ctx.date_dim] + [ctx.dims[k] for k in dim_keys]
-    from_sql, alias = _from_clause(ctx, dims)
+    filter_tables = sorted(({t for b in bases for t in ctx.bases[b].tables} | {c[0] for c in ctx.report_filters})
+                           - {ctx.fact})
+    from_sql, alias = _from_clause(ctx, dims + [_Path(ctx.model.join_path(ctx.fact, t)) for t in filter_tables])
     col = lambda d: f"{alias[d.table]}.{ident(d.source_column)}"  # noqa: E731
     cols = [f'{col(dims[0])} AS "{dims[0].key}"'] + [f"COALESCE({col(d)}, '{BLANK}') AS \"{d.key}\"" for d in dims[1:]]
-    aggs = [f'{ctx.bases[b].sql} AS "{b}"' for b in bases]
+    # CALCULATE filters on other tables refer to them as @@table@@: put in the join alias
+    put_alias = lambda sql: re.sub(r"@@(.+?)@@", lambda m: alias[m.group(1)], sql)  # noqa: E731
+    aggs = [put_alias(ctx.bases[b].sql) + f' AS "{b}"' for b in bases]
+    # report-level filters: every number in the report is computed under them
+    report_where = "".join(f"\n  AND {put_alias(cond_sql(ctx.model, ctx.fact, c))}" for c in ctx.report_filters)
     group = ", ".join(col(d) for d in dims)
     return (f"SELECT {', '.join(cols + aggs)}\n{from_sql}\n"
-            f"WHERE {col(ctx.date_dim)} BETWEEN :d0 AND :d1\nGROUP BY {group}")
+            f"WHERE {col(ctx.date_dim)} BETWEEN :d0 AND :d1{report_where}\nGROUP BY {group}")
 
 
-def order_level_dims(ctx: Context, conn, d1: date) -> list[str]:
-    """Dimensions that are constant within each distinct-count key (checked on the last 14 days)."""
+def order_level_dims(ctx: Context, conn, d1: date) -> tuple[list[str], set[str]]:
+    """Dimensions that are constant within each distinct-count key (checked on the last 14 days), and the keys
+    that span several days (e.g. CUSTOMER_ID): daily distinct counts of those cannot be added over a window."""
     keys = {b.distinct_of for b in ctx.bases.values() if b.distinct_of}
     if not keys:
-        return list(ctx.dims)
+        return list(ctx.dims), set()
     dims = [ctx.date_dim] + list(ctx.dims.values())
     from_sql, alias = _from_clause(ctx, dims)
     date_col = f"{alias[ctx.date_dim.table]}.{ident(ctx.date_dim.source_column)}"
     checks = ", ".join(f'COUNT(DISTINCT {alias[d.table]}.{ident(d.source_column)}) AS "{d.key}"' for d in dims)
-    result = set(ctx.dims) | {"business_date"}
+    result, cross_day = set(ctx.dims), set()
     cur = conn.cursor()
     for key in keys:
         cur.execute(f"""SELECT {', '.join(f'MAX("{d.key}")' for d in dims)} FROM (
@@ -70,10 +84,15 @@ def order_level_dims(ctx: Context, conn, d1: date) -> list[str]:
                             WHERE {date_col} BETWEEN :d0 AND :d1 GROUP BY f.{ident(key)}) x""",
                     d0=d1 - timedelta(days=13), d1=d1)
         row = cur.fetchone()
-        result &= {d.key for d, n in zip(dims, row) if n == 1}
-    if "business_date" not in result:
-        raise ValueError("distinct-count keys span several dates; cannot add them up over time")
-    return [k for k in ctx.dims if k in result]
+        if row[0] and row[0] > 1:
+            cross_day.add(key)
+            continue
+        result &= {d.key for d, n in zip(dims[1:], row[1:]) if n == 1}
+    return [k for k in ctx.dims if k in result], cross_day
+
+
+def cross_day_bases(ctx: Context, keys: set[str]) -> list[str]:
+    return [b for b, v in ctx.bases.items() if v.distinct_of in keys]
 
 
 def _fetch(conn, sql: str, d0: date, d1: date) -> pd.DataFrame:
@@ -89,8 +108,18 @@ def _replace(db, table: str, df: pd.DataFrame, d0: date, d1: date) -> None:
     db.register("incoming", df)
     exists = db.execute("SELECT count(*) FROM information_schema.tables WHERE table_name = ?",
                         [table]).fetchone()[0]
+    if not exists and df.empty:  # e.g. a month removed by a report filter: create the table from real rows
+        db.unregister("incoming")
+        return
     if not exists:
         db.execute(f"CREATE TABLE {table} AS SELECT * FROM incoming LIMIT 0")
+    else:  # a measure added to the model brings a new aggregate: add the column (older days stay empty)
+        have = {r[0] for r in db.execute("SELECT column_name FROM information_schema.columns WHERE table_name = ?",
+                                         [table]).fetchall()}
+        for c in df.columns:
+            if c not in have:
+                db.execute(f'ALTER TABLE {table} ADD COLUMN "{c}" DOUBLE')
+                print(f"  {table}: new column {c} — re-take the whole history: python -m analysis snapshot --start <first day>")
     db.execute(f"DELETE FROM {table} WHERE business_date BETWEEN ? AND ?", [d0, d1])
     if not df.empty:
         db.execute(f"INSERT INTO {table} BY NAME SELECT * FROM incoming")
@@ -130,9 +159,10 @@ def snapshot(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
         return snapshot_from_powerbi(ctx, d0, d1, verbose)
     additive = [b for b, v in ctx.bases.items() if not v.distinct_of]
     with sources.connect(ctx) as conn, open_db() as db:
-        order_dims = order_level_dims(ctx, conn, d1)
+        order_dims, cross_day = order_level_dims(ctx, conn, d1)
+        skipped = cross_day_bases(ctx, cross_day)
         line_sql = _grouped_sql(ctx, list(ctx.dims), additive)
-        order_sql = _grouped_sql(ctx, order_dims, list(ctx.bases))
+        order_sql = _grouped_sql(ctx, order_dims, [b for b in ctx.bases if b not in skipped])
         etl_sql = _etl_sql(ctx)
 
         start = d0
@@ -158,8 +188,8 @@ def snapshot(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
                 print(f"  snapshot {start} .. {end}: {len(lines):,} line rows, {len(orders):,} order rows",
                       flush=True)
             start = end + timedelta(days=1)
-        db.execute("CREATE OR REPLACE TABLE meta AS SELECT ? AS order_dims, ? AS updated_at",
-                   [",".join(order_dims), datetime.now()])
+        db.execute("CREATE OR REPLACE TABLE meta AS SELECT ? AS order_dims, ? AS updated_at, ? AS skipped_bases",
+                   [",".join(order_dims), datetime.now(), ",".join(skipped)])
 
 
 def snapshot_from_powerbi(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
@@ -167,12 +197,13 @@ def snapshot_from_powerbi(ctx: Context, d0: date, d1: date, verbose: bool = True
     src = sources.PowerBISource(ctx)
     additive = [b for b, v in ctx.bases.items() if not v.distinct_of]
     with open_db() as db:
-        order_dims = src.order_level_dims(d1)
+        order_dims, cross_day = src.order_level_dims(d1)
+        skipped = cross_day_bases(ctx, cross_day)
         start = d0
         while start <= d1:
             end = min(d1, (start.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1))
             lines = src.grouped(list(ctx.dims), additive, start, end)
-            orders = src.grouped(order_dims, list(ctx.bases), start, end)
+            orders = src.grouped(order_dims, [b for b in ctx.bases if b not in skipped], start, end)
             _replace(db, "line_snap", lines, start, end)
             _replace(db, "order_snap", orders, start, end)
             etl = src.etl(start, end)
@@ -191,8 +222,8 @@ def snapshot_from_powerbi(ctx: Context, d0: date, d1: date, verbose: bool = True
                 print(f"  snapshot {start} .. {end} (Power BI): {len(lines):,} line rows, {len(orders):,} order rows",
                       flush=True)
             start = end + timedelta(days=1)
-        db.execute("CREATE OR REPLACE TABLE meta AS SELECT ? AS order_dims, ? AS updated_at",
-                   [",".join(order_dims), datetime.now()])
+        db.execute("CREATE OR REPLACE TABLE meta AS SELECT ? AS order_dims, ? AS updated_at, ? AS skipped_bases",
+                   [",".join(order_dims), datetime.now(), ",".join(skipped)])
 
 
 def last_snapshot_date(db) -> date | None:
@@ -204,3 +235,12 @@ def last_snapshot_date(db) -> date | None:
 
 def order_dims(db) -> list[str]:
     return db.execute("SELECT order_dims FROM meta").fetchone()[0].split(",")
+
+
+def skipped_bases(db) -> set[str]:
+    """Aggregates not in the snapshots: distinct counts of keys that span several days."""
+    try:
+        value = db.execute("SELECT skipped_bases FROM meta").fetchone()[0]
+    except duckdb.BinderException:  # snapshots taken before this column existed
+        return set()
+    return set(value.split(",")) if value else set()

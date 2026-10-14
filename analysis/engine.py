@@ -157,10 +157,12 @@ class Engine:
         self.ctx = ctx
         self.db = db or store.open_db(read_only=True)
         self.order_dims = set(store.order_dims(self.db))
+        self.skipped_bases = store.skipped_bases(self.db)
         self.th = {**DEFAULT_THRESHOLDS, **ctx.config.get("thresholds", {})}
         self.windows = ctx.config["windows"]
         used = [m for m in ctx.model.used_measures() if m in ctx.formulas]
-        self.metrics = used or list(ctx.formulas)   # what the report shows
+        self.metrics = [m for m in used or list(ctx.formulas)   # what the report shows
+                        if not any(b in self.skipped_bases for b in ctx.formulas[m].bases)]
         self.cache: dict[tuple, Cube] = {}
         # signature -> (first reported, last reported); persisted by the report module
         self.reported: dict[tuple, tuple[date, date]] = {}
@@ -169,7 +171,8 @@ class Engine:
     def cube(self, dims: tuple[str, ...]) -> Cube:
         if dims not in self.cache:
             table = "order_snap" if set(dims) <= self.order_dims else "line_snap"
-            bases = [b for b in self.ctx.bases if table == "order_snap" or not self.ctx.bases[b].distinct_of]
+            bases = [b for b in self.ctx.bases if b not in self.skipped_bases
+                     and (table == "order_snap" or not self.ctx.bases[b].distinct_of)]
             self.cache[dims] = load_cube(self.db, dims, bases, self.d0, self.d1, table)
         return self.cache[dims]
 
@@ -194,8 +197,15 @@ class Engine:
         return "abs" if "%" in self.ctx.model.measures[metric].format_string else "pct"
 
     def allowed(self, metric: str, dims) -> bool:
-        needs_distinct = any(self.ctx.bases[b].distinct_of for b in self.ctx.formulas[metric].bases)
-        return not needs_distinct or set(dims) <= self.order_dims
+        bases = [self.ctx.bases[b] for b in self.ctx.formulas[metric].bases]
+        if any(b.name in self.skipped_bases for b in bases):
+            return False  # distinct count of something that spans days (customers): not additive over time
+        if any(b.distinct_of for b in bases) and not set(dims) <= self.order_dims:
+            return False
+        # CALCULATE(…, T[c] = x) overrides the report's filter on T[c]: split by T[c], Power BI shows the same
+        # filtered total for every member, so the measure is not analysed by that column
+        filtered = {f for b in bases for f in b.filters}
+        return not any((self.ctx.dims[k].table, self.ctx.dims[k].column) in filtered for k in dims)
 
     def changes(self, bases: dict, metric: str, window: str, member: bool = True):
         """cur, base, raw change, expected change, adjusted change (all series over dates).

@@ -16,6 +16,7 @@ import numpy as np
 from . import store
 from .context import DATA_DIR, Context, load
 from .engine import BROAD, WEEKDAY_LAGS, YEAR, Engine, Finding, Stat, evaluate, windowed
+from .semantic import describe_filter
 
 WINDOW_HELP = {
     "day": "單日：當日 vs 近 4 週同星期平均",
@@ -111,6 +112,21 @@ def resolve_period(date_str: str | None, window: str) -> tuple[date | None, str,
     d = clamp_to_data(d)
     w = window if window in ("month", "year") else "month"
     return d, w, f"「{date_str}」解讀為整個月：使用截至 {d} 的近 28 日（window={w}）"
+
+
+def why_not(e: Engine, metric: str, dims: tuple) -> str:
+    """Why a metric cannot be split by these dimensions."""
+    c = ctx()
+    cross = [c.bases[b] for b in c.formulas[metric].bases if b in e.skipped_bases]
+    if cross:
+        return (f"{metric} 是「{cross[0].distinct_of}」的不重複計數，同一個 {cross[0].distinct_of} 會出現在很多天，"
+                "每天的不重複數不能加總成一段期間的不重複數，所以不做期間比較")
+    filtered = {f for b in c.formulas[metric].bases for f in c.bases[b].filters}
+    hit = [c.dims[k].label for k in dims if (c.dims[k].table, c.dims[k].column) in filtered]
+    if hit:
+        return (f"{metric} 的 DAX 用 CALCULATE 固定篩選了「{'、'.join(hit)}」，"
+                f"Power BI 依這個欄位切分時每個成員都顯示同一個值，所以不依它分析")
+    return f"{metric} 只能依 {order_dim_labels()} 切分"
 
 
 def order_dim_labels() -> str:
@@ -292,6 +308,7 @@ def describe_model() -> dict:
         "維度": {d.label: {"key": k, "欄位": f"{d.table}[{d.column}]", "上層": c.dims[d.parent].label if d.parent else None,
                          "關聯": [str(r) for r in d.path]} for k, d in c.dims.items()},
         "時間窗": window_help(),
+        "報表篩選": report_filter_text(),
         "無法分析的量值": {m: {"說明": c.model.measures[m].description, "DAX": c.model.measures[m].expression,
                          "原因": f"分析引擎無法翻譯這個 DAX（{why}），可用 metric_lineage 查看定義，但無法計算變化"}
                      for m, why in c.skipped.items()},
@@ -369,7 +386,7 @@ def metric_change(metric: str | None = None, filters: dict | None = None, date_s
         stats, facts = [], []
         for m in metrics:
             if not e.allowed(m, tuple(scope)):
-                stats.append({"指標": m, "說明": f"此指標在這個範圍無法計算（只能依 {order_dim_labels()} 切分）"})
+                stats.append({"指標": m, "說明": f"此指標在這個範圍無法計算（{why_not(e, m, tuple(scope))}）"})
                 continue
             s = e.stat(bases, m, window, e.z_threshold(scope), member=bool(scope))
             if s:
@@ -405,7 +422,7 @@ def explain_change(metric: str, filters: dict | None = None, date_str: str | Non
         scope = resolve_scope(e, filters)
         bases = scope_bases(e, scope)
         if not e.allowed(metric, tuple(scope)):
-            raise ToolError(f"{metric} 不能依 {e.label(scope)} 切分（{metric} 只能依 {order_dim_labels()} 切分）")
+            raise ToolError(f"{metric} 不能依 {e.label(scope)} 切分：{why_not(e, metric, tuple(scope))}")
         s = e.stat(bases, metric, window, e.z_threshold(scope), member=bool(scope))
         if s is None:
             raise ToolError(untestable(e, bases, metric, window))
@@ -772,12 +789,32 @@ def metric_lineage(metric: str) -> dict:
     meas = c.model.measures[metric]
     f = c.formulas.get(metric)
     fact = c.model.tables[c.fact]
-    cols = sorted({b.sql for b in c.bases.values() if f and b.name in f.bases})
+    cols = sorted({b.readable() for b in c.bases.values() if f and b.name in f.bases})
     return {"量值": metric, "所在資料表": meas.table, "說明": meas.description, "DAX": meas.expression,
             "格式": meas.format_string, "引用的量值": f.refs if f else [],
             "實際計算": cols, "來源資料表": source_text(fact),
-            "報表中使用的位置": [f"{u.page} / {u.title or u.visual}" for u in c.model.usage if metric in u.measures]
-            or ["報表未直接使用"]}
+            "報表中使用的位置": [f"{u.page} / {u.title or u.visual}" + (f"（{'；'.join(u.filters)}）" if u.filters else "")
+                           for u in c.model.usage if metric in u.measures] or ["報表未直接使用"],
+            "報表篩選": report_filter_text()}
+
+
+def report_filter_text() -> dict:
+    """Which report filters the analysis applies, and which ones only hold on some pages / visuals."""
+    c = ctx()
+    out = {"整份報表（分析已套用）": [describe_filter(f) for f in c.report_filters] or ["無"]}
+    pages = {}
+    for u in c.model.usage:
+        for f in u.filters:
+            if f.startswith("頁面篩選"):
+                pages.setdefault(u.page, set()).add(f)
+    if pages:
+        out["只在某些頁面有效（分析未套用）"] = {p: sorted(fs) for p, fs in pages.items()}
+    visuals = [f"{u.page} / {u.title or u.visual}：{f}" for u in c.model.usage for f in u.filters if f.startswith("此圖")]
+    if visuals:
+        out["只在某些圖表有效（分析未套用）"] = visuals
+    if c.warnings:
+        out["無法套用"] = [w for w in c.warnings if w.startswith("報表篩選")]
+    return out
 
 
 def source_text(table) -> str:

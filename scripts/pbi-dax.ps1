@@ -9,17 +9,17 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 if ($List) {
-    $out = foreach ($p in Get-CimInstance Win32_Process -Filter "Name='msmdsrv.exe'") {
+    $items = New-Object System.Collections.ArrayList  # not $out: PowerShell names are case-insensitive ($Out)
+    foreach ($p in Get-CimInstance Win32_Process -Filter "Name='msmdsrv.exe'") {
         if ($p.CommandLine -notmatch "AnalysisServicesWorkspace") { continue }
         $ports = Get-NetTCPConnection -State Listen -OwningProcess $p.ProcessId -ErrorAction SilentlyContinue |
             Where-Object LocalAddress -eq "127.0.0.1" | Select-Object -ExpandProperty LocalPort
         $parent = Get-Process -Id $p.ParentProcessId -ErrorAction SilentlyContinue
         $title = if ($parent) { [string]$parent.MainWindowTitle } else { "" }
-        # JSON written by hand: ConvertTo-Json turns these objects into strings when run as a child process
-        '{"port":' + [int]($ports | Select-Object -First 1) + ',"exe":' + (ConvertTo-Json ([string]$p.ExecutablePath)) +
-            ',"title":' + (ConvertTo-Json $title) + '}'
+        [void]$items.Add('{"port":' + [int]($ports | Select-Object -First 1) + ',"exe":' +
+            (ConvertTo-Json ([string]$p.ExecutablePath)) + ',"title":' + (ConvertTo-Json $title) + '}')
     }
-    "[" + (@($out) -join ",") + "]"
+    "[" + ($items.ToArray() -join ",") + "]"
     exit
 }
 

@@ -6,6 +6,7 @@ so the analysis follows the same relationships and measure definitions as the re
 import json
 import re
 from collections import deque
+from datetime import date
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -39,7 +40,8 @@ class Table:
     name: str
     description: str = ""
     source_table: str | None = None  # physical table / Excel sheet, taken from the M partition
-    source: dict = field(default_factory=dict)  # {"kind": "oracle"} or {"kind": "excel", "file": ...}
+    source: dict = field(default_factory=dict)  # {"kind": "oracle"} / {"kind": "excel" | "csv", "file": ...}
+    m: str = ""                                 # the Power Query (M) of the partition
     columns: dict[str, Column] = field(default_factory=dict)
     measures: dict[str, Measure] = field(default_factory=dict)
 
@@ -66,6 +68,7 @@ class VisualUsage:
     title: str
     measures: list[str]
     columns: list[str]  # "TABLE.COLUMN"
+    filters: list[str] = field(default_factory=list)  # page- and visual-level filters, readable text
 
 
 @dataclass
@@ -74,6 +77,8 @@ class SemanticModel:
     relationships: list[Relationship]
     usage: list[VisualUsage]
     expressions: dict[str, str] = field(default_factory=dict)  # Power Query parameters (name → text value)
+    report_filters: list[tuple] = field(default_factory=list)  # report-level filters: (table, column, op, values)
+    filter_notes: list[str] = field(default_factory=list)      # report-level filters that cannot be applied
 
     @property
     def measures(self) -> dict[str, Measure]:
@@ -174,17 +179,43 @@ def parse_table(text: str) -> Table:
                 elif s.startswith("displayFolder:"):
                     obj.folder = s.split(":", 1)[1].strip()
             elif obj == "partition":
-                # Oracle navigation {[Name = "TABLE"]} or Excel sheet {[Item = "Sheet", Kind = "Sheet"]}
-                m = re.search(r'\{\[\s*(?:Name|Item)\s*=\s*"([^"]+)"', s)
-                if m and table.source_table is None:
-                    table.source_table = m.group(1)
-                if "Oracle.Database" in s:
-                    table.source = {"kind": "oracle"}
-                m = re.search(r'Excel\.Workbook\s*\(\s*File\.Contents\s*\(\s*("(?:[^"]|"")*"|[^)\s]+)', s)
-                if m:
-                    table.source = {"kind": "excel", "file": m.group(1)}
+                table.m += s + "\n"
         i += 1
+    if table and table.m:
+        table.source, table.source_table = m_source(table.m)
     return table
+
+
+# Power Query steps that only reshape columns: reading the file directly still gives the same rows
+HARMLESS_STEPS = {"Excel.Workbook", "File.Contents", "Csv.Document", "Oracle.Database", "Table.PromoteHeaders",
+                  "Table.TransformColumnTypes", "Table.RenameColumns", "Table.AddColumn", "Table.RemoveColumns",
+                  "Table.ReorderColumns", "Table.SelectColumns"}
+CODEPAGES = {"65001": "utf-8", "950": "cp950", "936": "gbk", "1252": "cp1252", "932": "cp932", "1200": "utf-16"}
+
+
+def m_source(m: str) -> tuple[dict, str | None]:
+    """Where a partition reads from, as far as it can be replicated without Power BI.
+
+    Oracle tables, Excel sheets / Excel tables, CSV files. `steps` lists the Table.* functions that change the
+    rows (filters, merges, unpivots …): with those, the file alone does not give the report's data."""
+    nav = re.search(r'\{\[\s*(?:Name|Item)\s*=\s*"([^"]+)"(?:\s*,\s*Kind\s*=\s*"(\w+)")?', m)
+    functions = set(re.findall(r"\b([A-Z][A-Za-z]*\.[A-Z][A-Za-z]*)\s*\(", m))
+    steps = sorted(f for f in functions if f.startswith("Table.") and f not in HARMLESS_STEPS)
+    renames = re.findall(r'\{\s*"((?:[^"]|"")*)"\s*,\s*"((?:[^"]|"")*)"\s*\}',
+                         m[m.find("Table.RenameColumns"):] if "Table.RenameColumns" in m else "")
+    common = {"steps": steps, "promote": "Table.PromoteHeaders" in m, "renames": renames}
+    if "Oracle.Database" in m:
+        return {"kind": "oracle"}, nav.group(1) if nav else None
+    file_ref = r'File\.Contents\s*\(\s*("(?:[^"]|"")*"|[^)\s]+)'
+    if x := re.search(r"Excel\.Workbook\s*\(\s*" + file_ref, m):
+        return {"kind": "excel", "file": x.group(1), "item_kind": (nav.group(2) if nav and nav.group(2) else "Sheet"),
+                **common}, nav.group(1) if nav else None
+    if x := re.search(r"Csv\.Document\s*\(\s*" + file_ref, m):
+        delim = re.search(r'Delimiter\s*=\s*"((?:[^"]|"")*)"', m)
+        enc = re.search(r"Encoding\s*=\s*(\d+)", m)
+        return {"kind": "csv", "file": x.group(1), "delimiter": delim.group(1) if delim else ",",
+                "encoding": CODEPAGES.get(enc.group(1), "utf-8") if enc else "utf-8", **common}, None
+    return {}, nav.group(1) if nav else None
 
 
 def parse_relationships(text: str) -> list[Relationship]:
@@ -210,12 +241,19 @@ def parse_relationships(text: str) -> list[Relationship]:
     return out
 
 
-def parse_report(report_dir: Path) -> list[VisualUsage]:
+def parse_report(report_dir: Path) -> tuple[list[VisualUsage], list[tuple], list[str]]:
+    """Visual usage (with page/visual filters as text) and the report-level filters."""
     pages_dir = report_dir / "definition" / "pages"
     order = json.loads((pages_dir / "pages.json").read_text(encoding="utf-8"))["pageOrder"]
+    report_json = report_dir / "definition" / "report.json"
+    report_filters, notes = parse_filters(
+        json.loads(report_json.read_text(encoding="utf-8")).get("filterConfig", {}).get("filters", [])
+        if report_json.exists() else [])
     usage = []
     for page in order:
         page_json = json.loads((pages_dir / page / "page.json").read_text(encoding="utf-8"))
+        page_conds, page_bad = parse_filters(page_json.get("filterConfig", {}).get("filters", []))
+        page_text = [f"頁面篩選：{describe_filter(c)}" for c in page_conds] + [f"頁面篩選（無法解讀）：{x}" for x in page_bad]
         for vf in sorted((pages_dir / page / "visuals").glob("*/visual.json")):
             v = json.loads(vf.read_text(encoding="utf-8"))
             visual = v.get("visual", {})
@@ -229,9 +267,82 @@ def parse_report(report_dir: Path) -> list[VisualUsage]:
             for t in visual.get("visualContainerObjects", {}).get("title", []):
                 lit = t.get("properties", {}).get("text", {}).get("expr", {}).get("Literal", {})
                 title = lit.get("Value", "").strip("'")
+            v_conds, v_bad = parse_filters(v.get("filterConfig", {}).get("filters", []))
+            text = page_text + [f"此圖篩選：{describe_filter(c)}" for c in v_conds] + \
+                [f"此圖篩選（無法解讀）：{x}" for x in v_bad]
             usage.append(VisualUsage(page_json.get("displayName", page), v["name"],
-                                     visual.get("visualType", ""), title, measures, columns))
-    return usage
+                                     visual.get("visualType", ""), title, measures, columns, text))
+    return usage, report_filters, notes
+
+
+# ---- report filters (PBIR filterConfig / legacy Layout "filters": the same query-filter JSON)
+COMPARISON = {0: "=", 1: ">", 2: ">=", 3: "<", 4: "<="}
+NEGATE = {"=": "<>", "<>": "=", "IN": "NOT IN", "NOT IN": "IN", "<": ">=", ">=": "<", ">": "<=", "<=": ">"}
+
+
+def parse_filters(entries: list) -> tuple[list[tuple], list[str]]:
+    """Filters with a selection → conditions (table, column, op, values); anything else → readable note."""
+    conds, bad = [], []
+    for f in entries or []:
+        flt = f.get("filter") if isinstance(f, dict) else None
+        if not flt:
+            continue  # a field in the filter pane with nothing selected
+        alias = {x.get("Name"): x.get("Entity") for x in flt.get("From", [])}
+        try:
+            for w in flt.get("Where", []):
+                conds += _condition(w["Condition"], alias)
+        except (Unsupported, KeyError, TypeError, ValueError) as e:
+            field_ = f.get("field", {})
+            name = next(iter(field_.values()), {}).get("Property", "?") if field_ else "?"
+            bad.append(f"{name}（{f.get('type', '')}：{e}）")
+    return conds, bad
+
+
+def _column_of(node: dict, alias: dict) -> tuple[str, str]:
+    col = node["Column"]
+    ref = col["Expression"]["SourceRef"]
+    return ref.get("Entity") or alias[ref["Source"]], col["Property"]
+
+
+def _literal_value(lit: dict):
+    v = lit["Literal"]["Value"]
+    if v.startswith("datetime'"):
+        return date.fromisoformat(v[9:19])
+    if v.startswith("'"):
+        return v[1:-1].replace("''", "'")
+    if v[-1:] in ("L", "D", "M") and re.fullmatch(r"-?\d+(\.\d+)?[LDM]", v):
+        return int(v[:-1]) if v.endswith("L") else float(v[:-1])
+    if v == "null":
+        raise Unsupported("篩選空白值")
+    raise Unsupported(f"值 {v}")
+
+
+def _condition(node: dict, alias: dict) -> list[tuple]:
+    if "And" in node:
+        return _condition(node["And"]["Left"], alias) + _condition(node["And"]["Right"], alias)
+    if "Not" in node:
+        inner = _condition(node["Not"]["Expression"], alias)
+        if len(inner) != 1:
+            raise Unsupported("NOT 多個條件")
+        t, c, op, values = inner[0]
+        return [(t, c, NEGATE[op], values)]
+    if "In" in node:
+        exprs = node["In"]["Expressions"]
+        if len(exprs) != 1 or "Values" not in node["In"]:
+            raise Unsupported("多欄或子查詢篩選（例如前 N 名）")
+        t, c = _column_of(exprs[0], alias)
+        return [(t, c, "IN", tuple(_literal_value(v[0]) for v in node["In"]["Values"]))]
+    if "Comparison" in node:
+        cmp = node["Comparison"]
+        t, c = _column_of(cmp["Left"], alias)
+        return [(t, c, COMPARISON[cmp["ComparisonKind"]], (_literal_value(cmp["Right"]),))]
+    raise Unsupported(f"條件類型 {next(iter(node), '?')}（例如 OR、相對日期、前 N 名）")
+
+
+def describe_filter(c: tuple) -> str:
+    t, col, op, values = c
+    text = {"IN": "只含", "NOT IN": "排除", "=": "=", "<>": "≠", ">": ">", ">=": "≥", "<": "<", "<=": "≤"}[op]
+    return f"{t}[{col}] {text} {'、'.join(str(v) for v in values)}"
 
 
 def _fields(node):
@@ -267,7 +378,8 @@ def load(pbip_dir: Path = PBIP_DIR) -> SemanticModel:
         ref = t.source.get("file")
         if ref:  # a literal path or the name of a text parameter
             t.source["file"] = ref[1:-1].replace('""', '"') if ref.startswith('"') else expressions.get(ref, ref)
-    return SemanticModel(tables, rels, parse_report(report_dir), expressions)
+    usage, report_filters, notes = parse_report(report_dir)
+    return SemanticModel(tables, rels, usage, expressions, report_filters, notes)
 
 
 def ident(name: str) -> str:
@@ -302,6 +414,16 @@ class Base:
     sql: str            # aggregate over fact alias f, e.g. SUM(f.SALES_AMOUNT)
     distinct_of: str | None = None  # column for COUNT(DISTINCT ...), not additive across all grains
     dax: str = ""       # the same aggregate in DAX, e.g. SUM('FACT_SALES'[SALES_AMOUNT])
+    # CALCULATE filters: ((table, column), ...). The SQL refers to non-fact columns as @@table@@.column,
+    # replaced by the join alias when the snapshot query is built (store.base_sql).
+    filters: tuple = ()
+
+    @property
+    def tables(self) -> set[str]:
+        return {t for t, _ in self.filters}
+
+    def readable(self) -> str:
+        return re.sub(r"@@(.+?)@@", r"\1", self.sql)
 
 
 @dataclass
@@ -317,12 +439,15 @@ class Formula:
 
 TOKEN = re.compile(r"""
     \s*(?:
-      (?P<num>\d+(?:\.\d+)?)
+      (?P<str>"(?:[^"]|"")*")
+    | (?P<num>\d+(?:\.\d+)?)
     | (?P<colref>(?:'(?:[^']|'')*'|[A-Za-z_][\w]*)\s*\[[^\]]+\])
     | (?P<mref>\[[^\]]+\])
     | (?P<func>[A-Za-z_][\w.]*)(?=\s*\()
     | (?P<ident>'(?:[^']|'')*'|[A-Za-z_]\w*)
-    | (?P<op>[-+*/(),])
+    | (?P<cmp><>|<=|>=|==|=|<|>)
+    | (?P<logic>&&|\|\|)
+    | (?P<op>[-+*/(),{}])
     )""", re.X)
 
 
@@ -345,6 +470,7 @@ class Translator:
         self.fact = fact
         self.bases: dict[str, Base] = {}
         self.formulas: dict[str, Formula] = {}
+        self.cond: list[tuple] = []  # active CALCULATE filters: (table, column, op, values)
 
     def _col(self, ref: str) -> tuple[str, str]:
         """(DAX reference, source column) of a fact column."""
@@ -355,8 +481,91 @@ class Translator:
         return dax_col(table, col), self.model.tables[table].columns[col].source_column or col
 
     def _base(self, name: str, sql: str, distinct_of: str | None = None, dax: str = "") -> str:
+        """An aggregate; inside CALCULATE the active filters are applied (CASE WHEN … / CALCULATE(…))."""
+        if self.cond:
+            name = f"{name}__{safe_name(self._cond_text())}"[:120]
+            sql = self._conditional_sql(sql)
+            dax = f"CALCULATE({dax}, {', '.join(self._cond_dax(c) for c in self.cond)})"
+            filters = tuple(sorted({(c[0], c[1]) for c in self.cond}))
+            self.bases.setdefault(name, Base(name, sql, distinct_of, dax, filters))
+            return name
         self.bases.setdefault(name, Base(name, sql, distinct_of, dax))
         return name
+
+    # ---- CALCULATE filters
+    def _cond_text(self) -> str:
+        return "_".join(f"{c[1]}_{c[2]}_{'_'.join(map(str, c[3]))}" for c in self.cond)
+
+    def _cond_sql(self, c: tuple) -> str:
+        return cond_sql(self.model, self.fact, c)
+
+    def _cond_dax(self, c: tuple) -> str:
+        return cond_dax(c)
+
+    def _conditional_sql(self, sql: str) -> str:
+        """SUM(x) → COALESCE(SUM(CASE WHEN cond THEN x END), 0); COUNT(*) → COUNT(CASE WHEN cond THEN 1 END)."""
+        cond = " AND ".join(self._cond_sql(c) for c in self.cond)
+        m = re.fullmatch(r"(SUM|COUNT)\((DISTINCT )?(.*)\)", sql, re.S)
+        agg, distinct, arg = m.group(1), m.group(2) or "", m.group(3)
+        arg = "1" if arg == "*" else arg
+        out = f"{agg}({distinct}CASE WHEN {cond} THEN {arg} END)"
+        return f"COALESCE({out}, 0)" if agg == "SUM" else out
+
+    def _filters(self) -> list[tuple]:
+        """CALCULATE filter arguments: Table[col] op literal, Table[col] IN {…}, NOT (…), KEEPFILTERS(…), &&."""
+        out = [self._filter()]
+        while self._peek() == ("logic", "&&"):
+            self.i += 1
+            out.append(self._filter())
+        return out
+
+    def _filter(self) -> tuple:
+        kind, val = self._peek()
+        if kind == "func" and val.upper() in ("KEEPFILTERS", "NOT"):
+            self.i += 1
+            self._take("op", "(")
+            (inner,) = self._filters() if val.upper() == "KEEPFILTERS" else [self._filter()]
+            self._take("op", ")")
+            if val.upper() == "KEEPFILTERS":
+                return inner
+            table, column, op, values = inner
+            flip = {"=": "<>", "==": "<>", "<>": "=", "IN": "NOT IN", "NOT IN": "IN", "<": ">=", ">=": "<",
+                    ">": "<=", "<=": ">"}
+            return table, column, flip[op], values
+        if kind != "colref":
+            raise Unsupported(f"CALCULATE filter {val!r} not supported (only column comparisons)")
+        self.i += 1
+        m = re.match(r"('(?:[^']|'')*'|[A-Za-z_]\w*)\s*\[([^\]]+)\]", val)
+        table, column = unquote(m.group(1)), m.group(2)
+        if table not in self.model.tables or column not in self.model.tables[table].columns:
+            raise Unsupported(f"unknown column {val}")
+        if table != self.fact:
+            self.model.join_path(self.fact, table)  # must be reachable over many-to-one relationships
+        nk, nv = self._peek()
+        if nk == "ident" and nv.upper() == "IN":
+            self.i += 1
+            self._take("op", "{")
+            values = [self._literal()]
+            while self._peek() == ("op", ","):
+                self.i += 1
+                values.append(self._literal())
+            self._take("op", "}")
+            return table, column, "IN", tuple(values)
+        if nk != "cmp":
+            raise Unsupported(f"CALCULATE filter on {val} needs a comparison")
+        self.i += 1
+        return table, column, nv, (self._literal(),)
+
+    def _literal(self):
+        kind, val = self._take()
+        if kind == "str":
+            return val[1:-1].replace('""', '"')
+        if kind == "num":
+            return float(val) if "." in val else int(val)
+        if (kind, val) == ("op", "-") and self._peek()[0] == "num":
+            n = self._take()[1]
+            return -(float(n) if "." in n else int(n))
+        raise Unsupported(f"literal expected, got {val!r}")
 
     def translate(self, measure: str) -> Formula:
         if measure in self.formulas:
@@ -414,6 +623,13 @@ class Translator:
             name = val[1:-1]
             if name not in self.model.measures:
                 raise Unsupported(f"unknown measure {name}")
+            if self.cond:  # inside CALCULATE: expand the measure under the filters (not the cached formula)
+                saved = (self.tokens, self.i)
+                self.tokens, self.i = tokenize(self.model.measures[name].expression), 0
+                inner = self._expr()
+                self.tokens, self.i = saved
+                self.refs.append(name)
+                return f"({inner})"
             saved = (self.tokens, self.i, self.refs, self.used)
             sub = self.translate(name)
             self.tokens, self.i, self.refs, self.used = saved
@@ -454,6 +670,37 @@ class Translator:
             key = "sumx_" + safe_name(sql.replace("f.", "").replace('"', ""))
             self.used.append(self._base(key, f"SUM({sql})", dax=f"SUMX({dax_table(table)}, {dax})"))
             return key
+        if fn == "CALCULATE":
+            saved_top = getattr(self, "_top_div", None)
+            start = self.i
+            depth = 0
+            while True:  # skip the expression to read the filters first
+                k, v = self._take()
+                if (k, v) == ("op", "("):
+                    depth += 1
+                elif (k, v) == ("op", ")"):
+                    if depth == 0:
+                        raise Unsupported("CALCULATE without filters")
+                    depth -= 1
+                elif (k, v) == ("op", ",") and depth == 0:
+                    break
+            conds = self._filters()
+            while self._peek() == ("op", ","):
+                self.i += 1
+                conds += self._filters()
+            end = self._take("op", ")")
+            after = self.i
+            self.i = start
+            self.cond += conds
+            try:
+                inner = self._expr()
+            finally:
+                del self.cond[-len(conds):]
+            self._take("op", ",")
+            self.i = after
+            self._top_div = saved_top
+            del end
+            return f"({inner})"
         if fn == "DIVIDE":
             num = self._expr()
             self._take("op", ",")
@@ -480,6 +727,41 @@ class Translator:
         if not parts:
             raise Unsupported("empty SUMX expression")
         return " ".join(parts), " ".join(dax)
+
+
+def _sql_lit(v) -> str:
+    if isinstance(v, date):
+        return f"DATE '{v.isoformat()}'"
+    return str(v) if isinstance(v, (int, float)) else "'" + str(v).replace("'", "''") + "'"
+
+
+def _dax_lit(v) -> str:
+    if isinstance(v, date):
+        return f"DATE({v.year}, {v.month}, {v.day})"
+    return str(v) if isinstance(v, (int, float)) else '"' + str(v).replace('"', '""') + '"'
+
+
+def cond_sql(model: SemanticModel, fact: str, c: tuple) -> str:
+    """A filter condition in SQL; columns of other tables as @@table@@.column (alias put in by store.py)."""
+    table, column, op, values = c
+    src = model.tables[table].columns[column].source_column or column
+    col = f"f.{ident(src)}" if table == fact else f"@@{table}@@.{ident(src)}"
+    if op in ("IN", "NOT IN"):
+        inner = f"{col} IN ({', '.join(_sql_lit(v) for v in values)})"
+        # DAX compares BLANK as not equal to any value: keep rows without a match on NOT IN / <>
+        return f"({inner})" if op == "IN" else f"(NOT {inner} OR {col} IS NULL)"
+    sql_op = {"==": "="}.get(op, op)
+    expr = f"{col} {sql_op} {_sql_lit(values[0])}"
+    return f"({expr} OR {col} IS NULL)" if op == "<>" else f"({expr})"
+
+
+def cond_dax(c: tuple) -> str:
+    table, column, op, values = c
+    ref = dax_col(table, column)
+    if op in ("IN", "NOT IN"):
+        inner = f"{ref} IN {{{', '.join(_dax_lit(v) for v in values)}}}"
+        return inner if op == "IN" else f"NOT ({inner})"
+    return f"{ref} {op} {_dax_lit(values[0])}"
 
 
 def translate_all(model: SemanticModel, fact: str) -> tuple[dict[str, Formula], dict[str, Base], dict[str, str]]:

@@ -15,7 +15,7 @@ import pandas as pd
 
 from . import dataset
 from .context import Context
-from .semantic import dax_col, dax_table, ident
+from .semantic import cond_dax, dax_col, dax_table, ident
 
 BLANK = "(空白)"  # same label as store.BLANK
 
@@ -31,22 +31,76 @@ def excel_path(ref: str) -> Path:
     raise FileNotFoundError(f"Excel source {ref} not found (also looked for {local})")
 
 
+class SourceError(SystemExit):
+    """The files alone cannot reproduce the report's data."""
+
+
+def read_file_table(t, ctx: Context) -> pd.DataFrame:
+    """One Excel sheet / Excel table / CSV file, read the way its Power Query does."""
+    src = t.source
+    if src.get("steps"):
+        raise SourceError(
+            f"資料表 {t.name} 的 Power Query 有會改變資料列的步驟（{'、'.join(src['steps'])}），直接讀檔案會和 Power BI "
+            f"不一致。請在分析設定加上 source: {{kind: powerbi, title: <報表視窗標題>}}，改從開啟中的報表讀取。")
+    path = excel_path(src["file"])
+    if dataset.VARIANT:
+        path = path.with_name(ctx.config["variants"][dataset.VARIANT])
+    header = 0 if src.get("promote") else None
+    if src["kind"] == "csv":
+        df = pd.read_csv(path, sep=src["delimiter"], encoding=src["encoding"], header=header)
+    elif src["item_kind"] == "Table":  # an Excel table object: its own range, header row included
+        import openpyxl
+        book = openpyxl.load_workbook(path, data_only=True, read_only=False)
+        ws, ref = next(((ws, ws.tables[t.source_table].ref) for ws in book.worksheets
+                        if t.source_table in ws.tables), (None, None))
+        if ws is None:
+            raise SourceError(f"{path.name} 裡找不到 Excel 表格 {t.source_table}")
+        rows = [[c.value for c in r] for r in ws[ref]]
+        df = pd.DataFrame(rows[1:], columns=rows[0])
+    elif src["item_kind"] == "Sheet":
+        df = pd.read_excel(path, sheet_name=t.source_table, header=header)
+    else:
+        raise SourceError(f"資料表 {t.name} 讀的是 Excel 的 {src['item_kind']}，請改用 source: powerbi")
+    if header is None and not (src["kind"] == "excel" and src["item_kind"] == "Table"):
+        # no header row promoted: Power Query names the columns Column1, Column2, … (Excel tables keep theirs)
+        df.columns = [f"Column{i + 1}" for i in range(df.shape[1])]
+    df = df.rename(columns={a.replace('""', '"'): b.replace('""', '"') for a, b in src.get("renames", [])})
+    return apply_types(df, t.m)
+
+
+def apply_types(df: pd.DataFrame, m: str) -> pd.DataFrame:
+    """Table.TransformColumnTypes: text from a CSV becomes dates and numbers, as in Power BI."""
+    call = m[m.find("Table.TransformColumnTypes"):] if "Table.TransformColumnTypes" in m else ""
+    for col, typ in re.findall(r'\{\s*"((?:[^"]|"")*)"\s*,\s*([^}]+?)\s*\}', call):
+        col = col.replace('""', '"')
+        if col not in df.columns:
+            continue
+        typ = typ.lower()
+        if "date" in typ:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+            if "datetime" not in typ:
+                df[col] = df[col].dt.normalize()
+        elif any(k in typ for k in ("int64", "number", "currency", "percentage", "double", "decimal")):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        elif "text" in typ:
+            df[col] = df[col].astype("string")
+    return df
+
+
 class ExcelSource:
-    """Excel sheets as DuckDB tables named like the M navigation step (the sheet name)."""
+    """Excel sheets / tables and CSV files as DuckDB tables, named like the model expects (store.py SQL)."""
 
     def __init__(self, ctx: Context):
         self.db = duckdb.connect()
-        books: dict[Path, pd.ExcelFile] = {}
+        needed = {ctx.fact} | {d.table for d in ctx.dims.values()} | {ctx.date_dim.table} | \
+            {t for b in ctx.bases.values() for t in b.tables} | {c[0] for c in ctx.report_filters}
         for t in ctx.model.tables.values():
-            if t.source.get("kind") != "excel" or not t.source_table:
+            if t.source.get("kind") not in ("excel", "csv") or t.name not in needed:
                 continue
-            path = excel_path(t.source["file"])
-            if dataset.VARIANT:
-                path = path.with_name(ctx.config["variants"][dataset.VARIANT])
-            book = books.setdefault(path, pd.ExcelFile(path))
-            df = book.parse(t.source_table)  # first row = headers (Table.PromoteHeaders)
+            df = read_file_table(t, ctx)
+            name = t.source_table or t.name
             self.db.register(f"_{t.name}", df)
-            self.db.execute(f"CREATE TABLE {ident(t.source_table)} AS SELECT * FROM {ident('_' + t.name)}")
+            self.db.execute(f"CREATE TABLE {ident(name)} AS SELECT * FROM {ident('_' + t.name)}")
         self._res = None
 
     # --- minimal DB-API surface used by store.py ---
@@ -75,7 +129,7 @@ class ExcelSource:
 
 
 def connect(ctx: Context):
-    if ctx.source["kind"] == "excel":
+    if ctx.source["kind"] in ("excel", "csv"):
         return ExcelSource(ctx)
     from simulator.db import connect as oracle_connect
     return oracle_connect()
@@ -85,14 +139,19 @@ def date_range(ctx: Context) -> tuple[date, date]:
     """First and last business date available in the source."""
     if ctx.source["kind"] == "powerbi":
         return PowerBISource(ctx).date_range()
-    if ctx.source["kind"] == "excel":
+    if ctx.source["kind"] in ("excel", "csv"):
         with ExcelSource(ctx) as src:
             t = ctx.model.tables[ctx.date_dim.table]
             col = ident(ctx.date_dim.source_column)
-            lo, hi = src.execute(f"SELECT min({col}), max({col}) FROM {ident(t.source_table)}").fetchone()
+            lo, hi = src.execute(f"SELECT min({col}), max({col}) FROM {ident(t.source_table or t.name)}").fetchone()
         return pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
     from simulator import config as sim_cfg
     return sim_cfg.HISTORY_START, date.today() - timedelta(days=1)
+
+
+def report_filter_dax(ctx: Context) -> list[str]:
+    """Report-level filters as DAX filter tables: FILTER(ALL('T'[c]), condition)."""
+    return [f"FILTER(ALL({dax_col(c[0], c[1])}), {cond_dax(c)})" for c in ctx.report_filters]
 
 
 class PowerBISource:
@@ -108,8 +167,9 @@ class PowerBISource:
         self.date = dax_col(ctx.date_dim.table, ctx.date_dim.column)
 
     def between(self, d0: date, d1: date) -> str:
-        return (f"FILTER(ALL({self.date}), {self.date} >= DATE({d0.year},{d0.month},{d0.day}) && "
-                f"{self.date} <= DATE({d1.year},{d1.month},{d1.day}))")
+        """The date range plus the report-level filters, as SUMMARIZECOLUMNS filter arguments."""
+        return ", ".join([f"FILTER(ALL({self.date}), {self.date} >= DATE({d0.year},{d0.month},{d0.day}) && "
+                          f"{self.date} <= DATE({d1.year},{d1.month},{d1.day}))"] + report_filter_dax(self.ctx))
 
     def query(self, columns: list[str], names: list[str], d0: date, d1: date, measures: dict[str, str]) -> pd.DataFrame:
         exprs = "".join(f', "{k}", {v}' for k, v in measures.items())
@@ -130,10 +190,11 @@ class PowerBISource:
             df["business_date"] = pd.to_datetime(df["business_date"]).dt.date
         return df
 
-    def order_level_dims(self, d1: date) -> list[str]:
-        """Dimensions with one value per distinct-count key (e.g. ORDER_ID), checked on the last 14 days."""
+    def order_level_dims(self, d1: date) -> tuple[list[str], set[str]]:
+        """Dimensions with one value per distinct-count key (e.g. ORDER_ID), checked on the last 14 days; and the
+        keys that span several days (their daily distinct counts cannot be added up)."""
         keys = {b.distinct_of for b in self.ctx.bases.values() if b.distinct_of}
-        result = set(self.ctx.dims)
+        result, cross_day = set(self.ctx.dims), set()
         for key in keys:
             col = next(c for c in self.ctx.model.tables[self.ctx.fact].columns.values()
                        if (c.source_column or c.name) == key)
@@ -143,10 +204,11 @@ class PowerBISource:
                             ["key", "business_date"] + dims, d1 - timedelta(days=13), d1,
                             {"n": self.ctx.bases["rows"].dax})
             if df.groupby("key")["business_date"].nunique().max() > 1:
-                raise ValueError("distinct-count keys span several dates; cannot add them up over time")
+                cross_day.add(key)
+                continue
             per_key = df.groupby("key")[dims].nunique(dropna=False).max()
             result &= {k for k in dims if per_key[k] <= 1}
-        return [k for k in self.ctx.dims if k in result]
+        return [k for k in self.ctx.dims if k in result], cross_day
 
     def calendar(self, d0: date, d1: date) -> pd.DataFrame:
         if self.ctx.holiday_source:

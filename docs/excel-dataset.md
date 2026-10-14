@@ -23,7 +23,7 @@ $env:PBI_DATASET = "superstore"                     # 之後的 analysis / agent
 - **Power BI 專案**（`datasets/superstore/powerbi/Superstore.pbip`）：就是一般人用 Power BI Desktop 匯入 Excel 會做出來的東西：
   - Power Query：`Excel.Workbook(File.Contents(ExcelPath))` → 工作表 → 升級標頭 → 變更型別；`Orders` 另外加了「訂單月份」欄位。
   - 關聯：`Orders[Region] → People[Region]`、`Orders[Order ID] → Returns[Order ID]`。原始資料的 `People` 把 Canada 拆成東西兩區，`Orders` 卻只寫 Canada，所以這條關聯有對不上的列，跟真實資料一樣髒。
-  - 15 個中文量值：銷售額、利潤、利潤率、訂單數、客單價、折扣率、平均標價（`SUMX(Orders, Orders[Sales] / (1 - Orders[Discount]))` 還原原價）……；另有 3 個用 `CALCULATE` 的量值（退貨訂單數、退貨率、去年同期），分析引擎翻譯不了，會明確標示「無法分析」。
+  - 15 個中文量值：銷售額、利潤、利潤率、訂單數、客單價、折扣率、平均標價（`SUMX(Orders, Orders[Sales] / (1 - Orders[Discount]))` 還原原價）……；另有 3 個用 `CALCULATE` 的量值：退貨訂單數、退貨率（`CALCULATE([訂單數], Returns[Returned] = "Yes")`，沿 Orders → Returns 的關聯翻譯成條件彙總，與 Power BI 對帳一致），以及去年同期（時間智慧函數，翻譯不了，明確標示「無法分析」）。
   - 4 頁報表：總覽、市場與地區、商品、顧客與運送。
 - **分析設定**（`datasets/superstore/analysis.yaml`）：要看的維度（市場 > 地區 > 國家、品類 > 子品類、顧客分群、運送方式）、交叉組合、門檻。這是唯一需要人寫的「業務知識」；量值、關聯、資料來源都從 Power BI 專案讀。
 

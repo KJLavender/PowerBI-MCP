@@ -260,9 +260,13 @@ def parse_report(report_dir: Path) -> tuple[list[VisualUsage], list[tuple], list
             measures, columns = [], []
             for f in _fields(visual.get("query", {})):
                 kind, body = next(iter(f.items()))
-                entity = body["Expression"]["SourceRef"]["Entity"]
+                if kind == "Aggregation":  # implicit measure, e.g. Sum(Table.Column): the column is used
+                    kind, body = next(iter(body.get("Expression", {}).items()), (None, {}))
+                ref = body.get("Expression", {}).get("SourceRef", {}) if isinstance(body, dict) else {}
+                if kind not in ("Measure", "Column") or "Entity" not in ref:
+                    continue  # hierarchy levels, visual calculations …
                 (measures if kind == "Measure" else columns).append(
-                    body["Property"] if kind == "Measure" else f"{entity}.{body['Property']}")
+                    body["Property"] if kind == "Measure" else f"{ref['Entity']}.{body['Property']}")
             title = ""
             for t in visual.get("visualContainerObjects", {}).get("title", []):
                 lit = t.get("properties", {}).get("text", {}).get("expr", {}).get("Literal", {})

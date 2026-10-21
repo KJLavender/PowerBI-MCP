@@ -61,3 +61,25 @@
   tools: [explain_change, metric_change]
   expect: ["正常|不顯著|波動|沒有明顯|未達"]
   forbid: ["無法產生可靠的回答"]
+
+# 跨報表（python -m analysis catalog）：財務部的 StoreTargets 報表讀同一個 Oracle，另有 Excel 門市月目標
+- id: cross-synonym
+  question: 財務部 StoreTargets 報表裡的「營收」，跟我們報表的銷售額是同一個東西嗎？
+  tools: [cross_report]
+  expect: ["相同|一樣|同義|等價|同一"]
+  forbid: ["不是同一|不相同|不一樣"]
+
+- id: cross-conflict
+  question: 為什麼財務部報表的銷售額，跟我們報表的銷售額對不起來？
+  tools: [cross_report]
+  expect: ["折扣"]
+
+- id: cross-excel
+  question: 財務部的門市目標 Excel，門市代碼跟系統裡的門市對得起來嗎？
+  tools: [cross_report]
+  expect: ["S025|S026|s013|S013"]
+
+- id: emphasis
+  question: StoreTargets 這份報表的作者想凸顯什麼？達成率的紅燈門檻是多少？
+  tools: [report_emphasis]
+  expect: ["90%", "東區"]

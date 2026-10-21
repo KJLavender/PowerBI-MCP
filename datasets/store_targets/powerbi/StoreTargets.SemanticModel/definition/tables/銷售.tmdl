@@ -1,0 +1,113 @@
+/// 銷售明細（Oracle FACT_SALES）
+table '銷售'
+	lineageTag: 93bae918-9522-57ea-882f-59f9954493d2
+
+	/// 折扣後實收金額
+	measure '營收' = SUM ( '銷售'[實收金額] )
+		formatString: #,##0
+		lineageTag: 2810436b-37df-5959-81e7-b13eccb53d1b
+
+	/// 折扣前銷售額（財務部定義）
+	measure '銷售額' = SUM ( '銷售'[實收金額] ) + SUM ( '銷售'[折扣金額] )
+		formatString: #,##0
+		lineageTag: 6595e70b-466b-5de4-922e-cd50c196112a
+
+	/// 營收 − 成本
+	measure '毛利' = [營收] - SUM ( '銷售'[成本金額] )
+		formatString: #,##0
+		lineageTag: 848037bd-eebb-5659-9569-06f2be7488f0
+
+	/// 毛利 ÷ 營收
+	measure '毛利率' = DIVIDE ( [營收] - SUM ( '銷售'[成本金額] ), [營收] )
+		formatString: 0.0%;-0.0%;0.0%
+		lineageTag: 27c0d77f-4101-5da7-b7de-ca27d2774a24
+
+	/// 銷售明細筆數
+	measure '訂單數' = COUNTROWS ( '銷售' )
+		formatString: #,##0
+		lineageTag: 48c352e4-be3b-5ea8-8793-6ee98ec20c96
+
+	column '訂單編號'
+		dataType: int64
+		isHidden
+		lineageTag: a5db1d53-718b-55db-80e8-a344d6d95192
+		summarizeBy: none
+		sourceColumn: ORDER_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column '明細序號'
+		dataType: int64
+		isHidden
+		lineageTag: 84e376af-f478-5825-8979-f1e7b5a11ca8
+		summarizeBy: none
+		sourceColumn: LINE_NO
+
+		annotation SummarizationSetBy = Automatic
+
+	column DATE_KEY
+		dataType: int64
+		isHidden
+		lineageTag: d941c3cf-b58b-5ac7-a222-e29e49593569
+		summarizeBy: none
+		sourceColumn: DATE_KEY
+
+		annotation SummarizationSetBy = Automatic
+
+	column '門市ID'
+		dataType: int64
+		isHidden
+		lineageTag: bca86707-6d1e-5b85-b57a-a0a5f66b9811
+		summarizeBy: none
+		sourceColumn: STORE_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	/// 折扣後實收金額
+	column '實收金額'
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: c76adf54-d0c0-5b5c-b2ef-62ed9ed4e684
+		summarizeBy: sum
+		sourceColumn: SALES_AMOUNT
+
+		annotation SummarizationSetBy = Automatic
+
+	column '折扣金額'
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: f1557fb4-4dbc-507d-93da-c73ff3805f49
+		summarizeBy: sum
+		sourceColumn: DISCOUNT_AMOUNT
+
+		annotation SummarizationSetBy = Automatic
+
+	column '成本金額'
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: a51f91c6-cbd2-553c-a52e-1ce7694a8ad8
+		summarizeBy: sum
+		sourceColumn: COST_AMOUNT
+
+		annotation SummarizationSetBy = Automatic
+
+	partition '銷售' = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database("127.0.0.1:1521/FREEPDB1", [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = "SALES_DW"]}[Data],
+				    TableNav = SchemaNav{[Name = "FACT_SALES"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"ORDER_ID", Int64.Type},
+				        {"LINE_NO", Int64.Type},
+				        {"DATE_KEY", Int64.Type},
+				        {"STORE_ID", Int64.Type},
+				        {"SALES_AMOUNT", Currency.Type},
+				        {"DISCOUNT_AMOUNT", Currency.Type},
+				        {"COST_AMOUNT", Currency.Type}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table

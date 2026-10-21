@@ -822,3 +822,177 @@ def source_text(table) -> str:
     if src["kind"] == "excel":
         return f"{table.source_table}（Excel 工作表，檔案 {Path(src['file'].replace(chr(92), '/')).name}）"
     return f"{table.source_table}（Oracle）"
+
+
+# ---------------------------------------------------------------------------------- other reports, author's intent
+@lru_cache(maxsize=1)
+def catalog_():
+    """All reports in one graph (built once per process; reading the key columns takes a few seconds)."""
+    from . import catalog
+    return catalog.build(catalog.load_reports())
+
+
+def _report(cat, name: str | None):
+    from . import dataset
+    name = name or dataset.NAME
+    r = cat.report(name)
+    if r is None:
+        raise ToolError(f"沒有報表「{name}」，可用：{'、'.join(f'{x.name}（{x.title}）' for x in cat.reports)}")
+    return r
+
+
+def report_emphasis(report: str | None = None) -> dict:
+    """What the report's author set to stand out: rules and thresholds, target lines, single members in colour,
+    Top N filters, comparison values on cards; layout hints separately (inferred, not stated)."""
+    from . import dataset, intent
+    cat = catalog_()
+    r = _report(cat, report)
+    explicit = [e for e in r.emphasis if e.explicit and e.kind not in ("bookmarks", "hidden_page")]
+    out = {"報表": f"{r.title}（{r.name}）",
+           "作者明確設定": [f"{e.page}／{e.visual}：{e.text}" for e in explicit] or ["沒有條件式格式、目標線或凸顯設定"],
+           "版面提示（依位置與大小推斷，不是作者明確設定）": [f"{e.page}：{e.text}" for e in r.emphasis
+                                                 if e.kind == "layout"]}
+    # the author's literal thresholds against the latest value, for metrics this dataset can compute
+    checks = []
+    if r.name == dataset.NAME:
+        rules = [t for t in intent.thresholds(r.emphasis) if t["kind"] == "rule" and t["field"] in ctx().metrics]
+        if rules:
+            with engine_at(None) as (e, d):
+                bases = scope_bases(e, {})
+                for t in rules:
+                    s = e.stat(bases, t["field"], "day", e.z_threshold({}), member=False)
+                    if s is None:
+                        continue
+                    hit = {"<": s.current < t["value"], "<=": s.current <= t["value"], ">": s.current > t["value"],
+                           ">=": s.current >= t["value"], "=": s.current == t["value"]}[t["op"]]
+                    tone = f" → {t['tone']}色" if t["tone"] else ""
+                    checks.append(f"{d} 整體{t['field']} {ctx().fmt(t['field'], s.current)}："
+                                  f"{'符合' if hit else '不符合'}作者規則「{t['field']} {t['op']} {t['value']}{tone}」"
+                                  f"（{t['page']}／{t['visual']}）")
+    if checks:
+        out["最新值對照作者門檻"] = checks
+    return out
+
+
+def cross_report(name: str = "", other: str | None = None) -> dict:
+    """A measure / column / table across all reports: its meaning in physical columns, measures in other reports
+    with the same meaning (any name) or the same name but another meaning, the sources and keys it shares, the
+    author's settings on it. With other: how the two are connected. Without name: an overview of all reports."""
+    from . import catalog, dataset
+    cat = catalog_()
+    if not name.strip():
+        return {"報表": [f"{r.title}（{r.name}）：{len(r.model.tables)} 張表、{len(r.model.measures)} 個量值"
+                       for r in cat.reports],
+                "共用的資料來源": [f"{catalog.source_label(s)}：" + "、".join(f"{r}／{t}" for r, t in uses)
+                             for s, uses in cat.shared_sources.items()],
+                "名稱不同但意思相同": [" = ".join(f"{c.report}「{c.measure}」" for c in g) for g in cat.same
+                               if len({c.measure for c in g}) > 1 and len({c.report for c in g}) > 1],
+                "同名但定義不同": [f"「{cf.name}」：" + "；".join(
+                    f"{'、'.join(c.report for c in g)} 的「{cf.name}」= {g[0].readable()}"
+                    + (f"（= {dataset.NAME} 的 {t}）" if g[0].report != dataset.NAME
+                       and (t := cat.in_terms_of(g[0], dataset.NAME)) else "")
+                    for g in cf.groups) for cf in cat.conflicts if cf.same_system],
+                "代碼比對": [_key_text(k) for k in cat.keys]}
+    if (r := cat.report(name)) and not other:
+        return _report_view(cat, r)
+    node = _find_node(cat, name)
+    d = cat.nodes[node]
+    out = {"對象": cat.label(node)}
+    if d["kind"] == "measure":
+        c = cat.measures[(d["report"], d["name"])]
+        out["DAX"] = c.expression
+        out["展開到來源欄位"] = c.readable()
+        same = [x for x in cat.group_of(c.report, c.measure) if (x.report, x.measure) != (c.report, c.measure)]
+        out["其他報表中意思相同的量值"] = [f"{x.report}「{x.measure}」" + ("（名稱不同）" if x.measure != c.measure else "")
+                                for x in same] or ["沒有"]
+        here = dataset.NAME
+        if c.report != here and (t := cat.in_terms_of(c, here)):
+            out[f"用 {here} 報表的量值表示"] = f"{c.report}「{c.measure}」= {t}"
+        mine = (c.report, c.measure)
+        clashes, listed = [], set()
+        for cf in sorted(cat.conflicts, key=lambda cf: not cf.same_system):  # same database first
+            for g in cf.groups if cf.name == c.measure else []:
+                ids = frozenset((x.report, x.measure) for x in g)
+                if mine in ids or ids in listed:
+                    continue
+                listed.add(ids)
+                text = f"{'、'.join(x.report for x in g)}：{g[0].readable()}"
+                t = cat.in_terms_of(g[0], here) if cf.same_system and g[0].report != here else None
+                if t:
+                    text += f"，也就是 {here} 報表的 {t}"
+                clashes.append(text + ("" if cf.same_system else "（不同系統的資料，非同一件事）"))
+        if clashes:
+            out["同名但定義不同"] = list(dict.fromkeys(clashes))
+    elif d["kind"] == "column":
+        src = [b for a, r, b in cat.edges if a == node and r == "來自"]
+        if src:
+            out["來源欄位"] = cat.nodes[src[0]]["name"]
+            out["其他報表讀同一個來源欄位"] = [cat.label(a) for a, r, b in cat.edges
+                                    if b == src[0] and r == "來自" and a != node] or ["沒有"]
+        keys = [k for k in cat.keys if node[len("column:"):] in k.left + k.right]
+        if keys:
+            out["代碼比對"] = [_key_text(k) for k in keys]
+    elif d["kind"] == "table":
+        src = [b for a, r, b in cat.edges if a == node and r == "讀取"]
+        if src:
+            out["來源"] = cat.nodes[src[0]]["name"]
+            out["其他報表讀同一張表"] = [cat.label(a) for a, r, b in cat.edges
+                                 if b == src[0] and r == "讀取" and a != node] or ["沒有"]
+    marks = [cat.nodes[a]["name"] for a, r, b in cat.edges if b == node and r == "凸顯"]
+    if marks:
+        out["報表作者的設定"] = marks
+    if other:
+        target = _find_node(cat, other)
+        path = cat.path(node, target)
+        out[f"與「{other}」的關係"] = cat.path_text(path, node) if path else \
+            ["在所有報表的模型、來源與代碼對應中都找不到關聯"]
+    return out
+
+
+def _report_view(cat, r) -> dict:
+    """Every measure of another report next to this report's measures: same meaning, same name only, or new."""
+    from . import dataset
+    from .catalog import source_label
+    here = dataset.NAME
+    rows = []
+    for (rep, m), c in cat.measures.items():
+        if rep != r.name:
+            continue
+        same = [x.measure for x in cat.group_of(rep, m) if x.report == here]
+        if same:
+            rows.append(f"{r.name}「{m}」= {here}「{same[0]}」" + ("（名稱不同、意思相同）" if same[0] != m else "（相同）"))
+        elif (here, m) in cat.measures:
+            t = cat.in_terms_of(c, here)
+            rows.append(f"{r.name}「{m}」與 {here}「{m}」同名但定義不同：{r.name} 的是 {c.readable()}"
+                        + (f"，也就是 {here} 的 {t}" if t else ""))
+        else:
+            rows.append(f"{r.name}「{m}」（{here} 沒有對應的量值）= {cat.in_terms_of(c, here, partial=True)}")
+    shared = [f"{source_label(sid)}：{'、'.join(f'{x}／{t}' for x, t in uses)}"
+              for sid, uses in cat.shared_sources.items() if {x for x, _ in uses} >= {r.name, here}]
+    return {"報表": f"{r.title}（{r.name}）", f"量值與 {here} 的對照": rows, "共用的資料來源": shared or ["沒有"],
+            "代碼比對": [_key_text(k) for k in cat.keys if any(x.startswith(r.name + ":") for x in k.left + k.right)]
+            or ["沒有跨系統的代碼"]}
+
+
+def _find_node(cat, name: str) -> str:
+    from . import dataset
+    found = cat.find(name, ("measure", "column", "table"))
+    if not found:
+        raise ToolError(f"所有報表中都找不到「{name}」。可以用 報表:名稱（例如 store_targets:營收）或 表[欄位] 指定")
+    mine = [n for n in found if cat.nodes[n].get("report") == dataset.NAME]
+    return (mine or found)[0]
+
+
+def _key_text(k) -> str:
+    from .catalog import short
+    near = {a for a, _ in k.near} | {b for _, b in k.near}
+    parts = [f"{'、'.join(k.left)} ↔ {'、'.join(k.right)}：相同 {k.shared} 個"]
+    if k.near:
+        parts.append("只差大小寫或空白 " + "、".join(f"「{a}」≈「{b}」" for a, b in k.near))
+    lo = [v for v in k.left_only if v not in near]
+    ro = [v for v in k.right_only if v not in near]
+    if lo:
+        parts.append(f"只在 {short(k.left_source)}：" + "、".join(lo[:10]) + ("…" if len(lo) > 10 else ""))
+    if ro and k.kind != "orphans":
+        parts.append(f"只在 {short(k.right_source)}：" + "、".join(ro[:10]) + ("…" if len(ro) > 10 else ""))
+    return "；".join(parts)

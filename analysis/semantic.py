@@ -205,7 +205,11 @@ def m_source(m: str) -> tuple[dict, str | None]:
                          m[m.find("Table.RenameColumns"):] if "Table.RenameColumns" in m else "")
     common = {"steps": steps, "promote": "Table.PromoteHeaders" in m, "renames": renames}
     if "Oracle.Database" in m:
-        return {"kind": "oracle"}, nav.group(1) if nav else None
+        # server and schema: a "literal" or the name of a text parameter (resolved in load)
+        server = re.search(r'Oracle\.Database\s*\(\s*("(?:[^"]|"")*"|[^,)\s]+)', m)
+        schema = re.search(r'\[\s*Schema\s*=\s*("(?:[^"]|"")*"|[^\]\s]+)\s*\]', m)
+        return {"kind": "oracle", **({"server": server.group(1)} if server else {}),
+                **({"schema": schema.group(1)} if schema else {})}, nav.group(1) if nav else None
     file_ref = r'File\.Contents\s*\(\s*("(?:[^"]|"")*"|[^)\s]+)'
     if x := re.search(r"Excel\.Workbook\s*\(\s*" + file_ref, m):
         return {"kind": "excel", "file": x.group(1), "item_kind": (nav.group(2) if nav and nav.group(2) else "Sheet"),
@@ -379,9 +383,10 @@ def load(pbip_dir: Path = PBIP_DIR) -> SemanticModel:
     expr_file = model_dir / "expressions.tmdl"
     expressions = parse_expressions(expr_file.read_text(encoding="utf-8")) if expr_file.exists() else {}
     for t in tables.values():
-        ref = t.source.get("file")
-        if ref:  # a literal path or the name of a text parameter
-            t.source["file"] = ref[1:-1].replace('""', '"') if ref.startswith('"') else expressions.get(ref, ref)
+        for key in ("file", "server", "schema"):
+            ref = t.source.get(key)
+            if ref:  # a literal or the name of a text parameter
+                t.source[key] = ref[1:-1].replace('""', '"') if ref.startswith('"') else expressions.get(ref, ref)
     usage, report_filters, notes = parse_report(report_dir)
     return SemanticModel(tables, rels, usage, expressions, report_filters, notes)
 

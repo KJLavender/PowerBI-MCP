@@ -84,6 +84,21 @@ def metric_lineage(metric: str) -> str:
     return _run(tools.metric_lineage, metric)
 
 
+@server.tool(annotations=READ_ONLY)
+def report_emphasis(report: str | None = None) -> str:
+    """報表作者刻意凸顯的設定：條件式格式的門檻與顏色、目標線、特別上色的成員、前 N 名、卡片比較值；
+    並用最新數字對照作者的門檻。問「報表想強調什麼」「紅燈門檻是多少」時使用。report 省略 = 目前的報表。"""
+    return _run(tools.report_emphasis, report)
+
+
+@server.tool(annotations=READ_ONLY)
+def cross_report(name: str = "", other: str | None = None) -> str:
+    """跨報表：某量值 / 欄位 / 資料表在其他報表的對應——意思相同的量值（不論名稱）、同名但定義不同、
+    共用的來源與代碼對不上的地方、作者的設定；給 other 時回傳兩者的關聯路徑。name 可寫 報表:名稱 或 表[欄位]；
+    name 省略 = 所有報表的關係總覽。問「別的報表」「為什麼兩份報表數字不一樣」「跟 Excel 對得起來嗎」時使用。"""
+    return _run(tools.cross_report, name, other)
+
+
 def main(**kwargs: Any) -> None:
     server.run("stdio")
 

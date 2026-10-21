@@ -1,0 +1,17 @@
+relationship 8288ffae-44a0-5392-9a98-97887b8c29a6
+	fromColumn: '銷售'.DATE_KEY
+	toColumn: '日期'.DATE_KEY
+
+relationship 67a80eed-5d23-5f68-96f6-c6db6077b3f6
+	fromColumn: '銷售'.'門市ID'
+	toColumn: '門市'.'門市ID'
+
+relationship ffeef19b-f438-5881-ad53-dac4fc9408ec
+	fromColumn: '門市月目標'.'門市代碼'
+	toColumn: '門市'.'門市代碼'
+
+relationship be7331af-af8e-53b5-b0b9-2030f37b31f3
+	toCardinality: many
+	crossFilteringBehavior: bothDirections
+	fromColumn: '門市月目標'.'年月'
+	toColumn: '日期'.'年月'

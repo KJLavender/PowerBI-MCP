@@ -1,0 +1,54 @@
+/// 門市（Oracle DIM_STORE）
+table '門市'
+	lineageTag: 65c4ee6e-48d7-5d86-9f46-d9e59eaaebe0
+
+	column '門市ID'
+		dataType: int64
+		isHidden
+		lineageTag: 073d9de1-74fb-57dd-a7e0-98bae3905b86
+		summarizeBy: none
+		sourceColumn: STORE_ID
+
+		annotation SummarizationSetBy = Automatic
+
+	column '門市代碼'
+		dataType: string
+		lineageTag: 9523e9f1-372a-59fc-8f71-52ad0e99e2a0
+		summarizeBy: none
+		sourceColumn: STORE_CODE
+
+		annotation SummarizationSetBy = Automatic
+
+	column '門市名稱'
+		dataType: string
+		lineageTag: 440826a5-80a1-547f-90c7-5d38c3653e41
+		summarizeBy: none
+		sourceColumn: STORE_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	column '區域'
+		dataType: string
+		lineageTag: 89a6b10e-faf2-51d5-accc-b18c697ad223
+		summarizeBy: none
+		sourceColumn: REGION_NAME
+
+		annotation SummarizationSetBy = Automatic
+
+	partition '門市' = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database("127.0.0.1:1521/FREEPDB1", [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = "SALES_DW"]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_STORE"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"STORE_ID", Int64.Type},
+				        {"STORE_CODE", type text},
+				        {"STORE_NAME", type text},
+				        {"REGION_NAME", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table

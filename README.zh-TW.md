@@ -19,6 +19,7 @@
 | 5. Excel 報表 | 同一套引擎與問答，用在以公開 Global Superstore 活頁簿做成的 Power BI 報表（一天約 18 筆訂單）：照模型的 Power Query 讀 Excel，門檻用未修改的原始活頁簿校準（每天背景變化 0.2 則），**可偵測的 5 個埋入事件抓到 4 個** |
 | 6. 查核 | 每個回答都經過 9 項機械式查核（日期、範圍、數字、名稱、對應、方向、顯著性、無據原因、重點）。不通過就退回重寫，仍不通過時改顯示分析工具自己的判讀。**沒有任何錯誤回答通過查核**；突變測試刻意竄改正確回答，查核攔下 **94–99%**；分析引擎的數字與 Power BI 自己用 DAX 算出的結果對帳（**10,316 個數字，0 個不一致**） |
 | 7. 任何 .pbix | `python -m analysis import-pbix 檔案.pbix --name X`：模型從 Power BI Desktop 開啟檔案時的背景引擎讀（DMV）、頁面從 .pbix 本身讀、資料用 DAX 取（所以任何資料來源都可以），並依資料推出分析設定草稿。用零售 .pbix、完全不手動調整：快照與直接讀 Oracle 完全相同（**544,515 個值，0 個不一致**），埋入事件全數找到，問答 **10/11** 正確，沒有錯誤回答通過查核 |
+| 8. 多份報表與作者意圖 | `python -m analysis catalog` 把所有報表放進同一張圖：每張表追到實體來源（不論在報表裡叫什麼）、每個量值展開到來源欄位後比對公式是否等價（不看名稱）、Excel 與資料庫的代碼讀實際資料逐值比對。`python -m analysis intent` 讀出作者設定的門檻、目標線、特別上色的成員。財務部的第二份零售報表（另接 Excel 門市目標）裡刻意放的同義、同名不同義、代碼不一致**全部找到**；格式解析用 Microsoft 10 個官方範例 .pbix 驗證，數量全部一致；跨報表問答 **4/4** |
 
 範例（`python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`）：
 
@@ -78,6 +79,12 @@ python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m agent mutation-test         # 刻意竄改通過的回答，看查核擋不擋得下
 .\.venv\Scripts\python -m analysis reconcile          # 與 Power BI Desktop 自己用 DAX 算的數字對帳（先開啟報表）
 
+# 多份報表與作者意圖
+.\.venv\Scripts\python datasets\store_targets\prepare.py   # 財務部報表的 Excel 門市目標（從 Oracle 產生）
+.\.venv\Scripts\python datasets\store_targetsuild_pbip.py
+.\.venv\Scripts\python -m analysis catalog                  # → reports/catalog.md
+.\.venv\Scripts\python -m analysis intent store_targets     # 作者設定的門檻、目標線、凸顯
+
 # Excel 報表（Global Superstore）：上面所有指令設定 PBI_DATASET 後都適用
 $env:PBI_DATASET = "superstore"
 .\.venv\Scripts\python datasets\superstore\prepare.py   # 下載（SHA-256 驗證）並寫出埋入事件的版本
@@ -93,6 +100,7 @@ $env:PBI_DATASET = "superstore"
 - `powerbi/RetailSales.pbip`：同一份報表的 Power BI 專案格式（TMDL + PBIR），由 `powerbi/build_pbip.py` 產生。
 - `reports/`：每日報告範例、Phase 2 與 Phase 3 的評分結果、突變測試，以及與 Power BI 的對帳結果。
 - `datasets/superstore/`：Excel 報表（Power BI 專案、分析設定、埋入事件、問答題庫）與它的結果（`reports/`）。活頁簿本身由 `prepare.py` 下載。
+- `datasets/store_targets/`：財務部的門市目標達成報表，和零售報表讀同一個 Oracle，另接 Excel 目標（由 `prepare.py` 產生，含刻意的不一致）；`reports/catalog.md` 是所有報表的目錄。
 
 ## Repo 結構
 
@@ -104,7 +112,7 @@ $env:PBI_DATASET = "superstore"
 | `agent/` | 本機 Ollama Agent、數字查核、問答題庫 |
 | `scripts/` | 啟動容器、排程、Report Server 安裝與發佈 |
 | `docker/` | Oracle Database Free + SQL Server Developer（Report Server 目錄資料庫） |
-| `datasets/` | 用同一套引擎分析的其他報表（Excel 上的 Global Superstore） |
+| `datasets/` | 用同一套引擎分析的其他報表（Excel 上的 Global Superstore）、跨報表測試用的財務部報表 |
 | `docs/` | 各階段的設計說明 |
 
 ## 文件
@@ -115,10 +123,12 @@ $env:PBI_DATASET = "superstore"
 - [docs/report-server.md](docs/report-server.md)：Report Server 安裝，以及 PBIR 格式的陷阱
 - [docs/pbix-import.md](docs/pbix-import.md)：直接從 .pbix 匯入報表
 - [docs/excel-dataset.md](docs/excel-dataset.md)：Excel 報表：小量資料的校準、偵測結果、對帳
+- [docs/catalog.md](docs/catalog.md)：多份報表的關係（血緣、同義與同名不同義的量值、代碼比對）與報表作者的意圖
 
 ## 限制
 
 - 分析能說明變化**發生在哪裡**，但無法說明業務上的原因，除非那個原因本身也在資料裡。
 - 門檻要依每份報表校準：Excel 資料直接沿用原設定時每天誤報 7.3 則，改用未修改的原始活頁簿校準後才降下來。資料量小時，只能看出大事件。
 - 查核能證明回答與分析結果一致，不能證明分析選到的是最好的解釋；所以回答一定附上證據。
+- 量值是否同義只涵蓋常見的 DAX 寫法；`IF`、`SWITCH` 等會列為無法展開，不會被當成相同。混用 Oracle 與 Excel 的報表目前只用在目錄與問答，沒有每日變動分析。
 - 若把 MCP Server 接到使用雲端模型的 MCP Client，工具結果會送出本機，只適合用在模擬資料。

@@ -1,0 +1,48 @@
+/// 日期（Oracle DIM_DATE）
+table '日期'
+	lineageTag: a34cf0df-b2de-5d94-a982-ae1ed84b1d31
+
+	column DATE_KEY
+		dataType: int64
+		isHidden
+		lineageTag: 8bbdcf13-3169-5f42-bfc6-207943138620
+		summarizeBy: none
+		sourceColumn: DATE_KEY
+
+		annotation SummarizationSetBy = Automatic
+
+	column '日期'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: d7bf9d7b-8e48-5705-8a3a-7060bc85a45f
+		summarizeBy: none
+		sourceColumn: FULL_DATE
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation UnderlyingDateTimeDataType = Date
+
+	column '年月'
+		dataType: string
+		lineageTag: 2d088730-e973-5e83-b876-cd5dd75f90ca
+		summarizeBy: none
+		sourceColumn: YEAR_MONTH
+
+		annotation SummarizationSetBy = Automatic
+
+	partition '日期' = m
+		mode: import
+		source =
+				let
+				    Source = Oracle.Database("127.0.0.1:1521/FREEPDB1", [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = "SALES_DW"]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_DATE"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"DATE_KEY", Int64.Type},
+				        {"FULL_DATE", type date},
+				        {"YEAR_MONTH", type text}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table

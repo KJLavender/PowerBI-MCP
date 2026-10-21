@@ -1,0 +1,5 @@
+/// 財務部目標活頁簿的完整路徑
+expression TargetWorkbook = "C:\Users\user\Desktop\PowerBI MCP\datasets\store_targets\data\store_targets.xlsx" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 963c970b-c531-5e79-a36a-ff7fc7b0dea3
+
+	annotation PBI_ResultType = Text

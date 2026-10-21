@@ -145,8 +145,23 @@ def write_model(model: dict, out: Path) -> None:
 
 
 # ------------------------------------------------------------------------------------------- report
+def _entity_field(sel: dict, alias: dict) -> dict | None:
+    """A prototypeQuery select (Measure / Column / Aggregation over a column) with the alias replaced by the table."""
+    for kind in ("Measure", "Column"):
+        if kind in sel:
+            entity = alias.get(sel[kind].get("Expression", {}).get("SourceRef", {}).get("Source"))
+            if entity is None:
+                return None
+            return {kind: {"Expression": {"SourceRef": {"Entity": entity}}, "Property": sel[kind]["Property"]}}
+    if "Aggregation" in sel:
+        inner = _entity_field(sel["Aggregation"].get("Expression", {}), alias)
+        return {"Aggregation": {"Expression": inner, "Function": sel["Aggregation"].get("Function")}} if inner else None
+    return None
+
+
 def write_report(pbix: Path | None, out: Path) -> int:
-    """Copy which fields each visual uses into a minimal PBIR folder; returns the number of visuals."""
+    """Copy the report into a minimal PBIR folder: which fields each visual uses, its filters, position and
+    formatting (for intent.py); returns the number of visuals."""
     pages_dir = out / "definition" / "pages"
     pages_dir.mkdir(parents=True, exist_ok=True)
     if pbix is None:  # only the open report: keep pages imported earlier from the file, if any
@@ -171,38 +186,50 @@ def write_report(pbix: Path | None, out: Path) -> int:
         order.append(name)
         pdir = pages_dir / name
         pdir.mkdir(parents=True, exist_ok=True)
-        (pdir / "page.json").write_text(json.dumps({"name": name, "displayName": sec.get("displayName", name),
-                                                    **filters(sec)}, ensure_ascii=False), encoding="utf-8")
+        page = {"name": name, "displayName": sec.get("displayName", name), "width": sec.get("width", 1280),
+                "height": sec.get("height", 720), **filters(sec)}
+        if json.loads(sec.get("config") or "{}").get("visibility") == 1:
+            page["visibility"] = "HiddenInViewMode"
+        (pdir / "page.json").write_text(json.dumps(page, ensure_ascii=False), encoding="utf-8")
         for i, vc in enumerate(sec.get("visualContainers", [])):
             cfg = json.loads(vc.get("config") or "{}")
             sv = cfg.get("singleVisual") or {}
             query = sv.get("prototypeQuery") or {}
             alias = {f["Name"]: f["Entity"] for f in query.get("From", [])}
-            fields = []
+            by_ref = {}
             for sel in query.get("Select", []):
-                kind = "Measure" if "Measure" in sel else "Column" if "Column" in sel else None
-                if not kind:
-                    continue
-                body = sel[kind]
-                entity = alias.get(body.get("Expression", {}).get("SourceRef", {}).get("Source"))
-                if entity:
-                    fields.append({"field": {kind: {"Expression": {"SourceRef": {"Entity": entity}},
-                                                    "Property": body["Property"]}}})
-            if not fields:
+                field = _entity_field(sel, alias)
+                if field:
+                    by_ref[sel.get("Name")] = {"field": field}
+            if not sv.get("visualType"):
                 continue
-            title = ""
-            for t in (sv.get("vcObjects") or {}).get("title", []):
-                lit = t.get("properties", {}).get("text", {}).get("expr", {}).get("Literal", {})
-                title = lit.get("Value", "")
-            visual = {"name": cfg.get("name", f"v{i}"), "visual": {"visualType": sv.get("visualType", ""),
-                      "query": {"queryState": {"Values": {"projections": fields}}}}, **filters(vc)}
-            if title:
-                visual["visual"]["visualContainerObjects"] = {"title": [{"properties": {"text": {"expr": {
-                    "Literal": {"Value": title}}}}}]}
+            # fields per role (Y, Category, TargetValue …), as in PBIR; fields in no role go under Values
+            roles = {r: [by_ref[p["queryRef"]] for p in ps if p.get("queryRef") in by_ref]
+                     for r, ps in (sv.get("projections") or {}).items()}
+            placed = {json.dumps(f) for fs in roles.values() for f in fs}
+            rest = [f for f in by_ref.values() if json.dumps(f) not in placed]
+            if rest:
+                roles.setdefault("Values", []).extend(rest)
+            # keep the author's formatting (conditional formats, lines, colours) and the position for intent.py
+            visual = {"name": cfg.get("name", f"v{i}"),
+                      "position": {"x": vc.get("x", 0), "y": vc.get("y", 0), "width": vc.get("width", 0),
+                                   "height": vc.get("height", 0)},
+                      "visual": {"visualType": sv.get("visualType", ""),
+                                 "query": {"queryState": {r: {"projections": fs} for r, fs in roles.items() if fs}},
+                                 "objects": sv.get("objects") or {},
+                                 "visualContainerObjects": sv.get("vcObjects") or {}},
+                      **filters(vc)}
             vdir = pdir / "visuals" / visual["name"]
             vdir.mkdir(parents=True, exist_ok=True)
             (vdir / "visual.json").write_text(json.dumps(visual, ensure_ascii=False), encoding="utf-8")
             count += 1
+    bookmarks = json.loads(layout.get("config") or "{}").get("bookmarks", [])
+    bookmarks += [c for b in bookmarks for c in b.get("children", [])]
+    for i, b in enumerate(b for b in bookmarks if b.get("displayName")):
+        bdir = out / "definition" / "bookmarks"
+        bdir.mkdir(parents=True, exist_ok=True)
+        (bdir / f"b{i:03d}.bookmark.json").write_text(json.dumps({"displayName": b["displayName"]}, ensure_ascii=False),
+                                                  encoding="utf-8")
     (pages_dir / "pages.json").write_text(json.dumps({"pageOrder": order}), encoding="utf-8")
     return count
 

@@ -1,0 +1,193 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.1.0/schema.json",
+  "name": "marginTable",
+  "position": {
+    "x": 20,
+    "y": 400,
+    "z": 300,
+    "width": 1240,
+    "height": 310,
+    "tabOrder": 300
+  },
+  "visual": {
+    "visualType": "tableEx",
+    "query": {
+      "queryState": {
+        "Values": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "門市"
+                    }
+                  },
+                  "Property": "門市名稱"
+                }
+              },
+              "queryRef": "門市.門市名稱",
+              "nativeQueryRef": "門市名稱",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "銷售"
+                    }
+                  },
+                  "Property": "營收"
+                }
+              },
+              "queryRef": "銷售.營收",
+              "nativeQueryRef": "營收",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "銷售"
+                    }
+                  },
+                  "Property": "毛利"
+                }
+              },
+              "queryRef": "銷售.毛利",
+              "nativeQueryRef": "毛利",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "銷售"
+                    }
+                  },
+                  "Property": "毛利率"
+                }
+              },
+              "queryRef": "銷售.毛利率",
+              "nativeQueryRef": "毛利率",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "銷售"
+                    }
+                  },
+                  "Property": "銷售額"
+                }
+              },
+              "queryRef": "銷售.銷售額",
+              "nativeQueryRef": "銷售額",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "銷售"
+                    }
+                  },
+                  "Property": "訂單數"
+                }
+              },
+              "queryRef": "銷售.訂單數",
+              "nativeQueryRef": "訂單數",
+              "active": true
+            }
+          ]
+        }
+      }
+    },
+    "objects": {
+      "values": [
+        {
+          "properties": {
+            "fontColor": {
+              "solid": {
+                "color": {
+                  "expr": {
+                    "Conditional": {
+                      "Cases": [
+                        {
+                          "Condition": {
+                            "Comparison": {
+                              "ComparisonKind": 3,
+                              "Left": {
+                                "Measure": {
+                                  "Expression": {
+                                    "SourceRef": {
+                                      "Entity": "銷售"
+                                    }
+                                  },
+                                  "Property": "毛利率"
+                                }
+                              },
+                              "Right": {
+                                "Literal": {
+                                  "Value": "0.45D"
+                                }
+                              }
+                            }
+                          },
+                          "Value": {
+                            "Literal": {
+                              "Value": "'#E81123'"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "selector": {
+            "data": [
+              {
+                "dataViewWildcard": {
+                  "matchingOption": 1
+                }
+              }
+            ],
+            "metadata": "銷售.毛利率"
+          }
+        }
+      ]
+    },
+    "visualContainerObjects": {
+      "title": [
+        {
+          "properties": {
+            "show": {
+              "expr": {
+                "Literal": {
+                  "Value": "true"
+                }
+              }
+            },
+            "text": {
+              "expr": {
+                "Literal": {
+                  "Value": "'各門市毛利'"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

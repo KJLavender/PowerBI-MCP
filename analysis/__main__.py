@@ -7,6 +7,9 @@
   python -m analysis model                            show what was read from the Power BI project
   python -m analysis reconcile [--port P]             compare with the numbers Power BI Desktop computes (DAX)
   python -m analysis import-pbix FILE.pbix --name N   new dataset from a .pbix (model read from Power BI Desktop)
+  python -m analysis intent [REPORT]                  what the author emphasises (rules, target lines, highlights)
+  python -m analysis catalog [--no-data]              all reports in one graph: shared sources, same / clashing
+                                                      measures, key matches between systems → reports/catalog.md
 
 The report analysed is chosen with PBI_DATASET (default: retail; e.g. PBI_DATASET=superstore).
 """
@@ -80,6 +83,34 @@ def cmd_model(_args) -> None:
             print(f"  {u.page} / {u.title or u.visual}: {', '.join(u.measures)}")
 
 
+def cmd_intent(args) -> None:
+    from pathlib import Path
+    from . import intent
+    target = args.report or dataset.NAME
+    path = Path(target)
+    if not path.exists():  # a dataset name
+        path = next((dataset.ROOT / "powerbi" if target == "retail" else
+                     dataset.ROOT / "datasets" / target / "powerbi").glob("*.Report"))
+    items = intent.extract(path)
+    text = intent.to_markdown(items, path.stem)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"written: {args.out}")
+    else:
+        print(text)
+
+
+def cmd_catalog(args) -> None:
+    from . import catalog
+    cat = catalog.build(catalog.load_reports(args.reports or None), read_data=not args.no_data)
+    out = dataset.ROOT / "reports" / "catalog.md"
+    out.write_text(catalog.to_markdown(cat), encoding="utf-8")
+    print(f"{len(cat.reports)} reports, {len(cat.measures)} measures, {len(cat.same)} groups with the same meaning, "
+          f"{len(cat.conflicts)} same-name conflicts, {len(cat.keys)} key matches, "
+          f"{len(cat.nodes)} nodes / {len(cat.edges)} edges")
+    print(f"written: {out}")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="analysis", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -103,6 +134,14 @@ def main() -> None:
     s.add_argument("--port", type=int)
     s.add_argument("--title")
     s.set_defaults(func=lambda a: __import__("analysis.pbix", fromlist=["main"]).main(a.file, a.name, a.port, a.title))
+    s = sub.add_parser("intent", help="what the report's author emphasises")
+    s.add_argument("report", nargs="?", help="dataset name, .pbix file or *.Report folder (default: PBI_DATASET)")
+    s.add_argument("--out")
+    s.set_defaults(func=cmd_intent)
+    s = sub.add_parser("catalog", help="all reports in one graph")
+    s.add_argument("reports", nargs="*", help="dataset names (default: all)")
+    s.add_argument("--no-data", action="store_true", help="do not read source data (no key comparison)")
+    s.set_defaults(func=cmd_catalog)
     s = sub.add_parser("reconcile")
     s.add_argument("--port", type=int)
     s.add_argument("--samples", type=int, default=6)

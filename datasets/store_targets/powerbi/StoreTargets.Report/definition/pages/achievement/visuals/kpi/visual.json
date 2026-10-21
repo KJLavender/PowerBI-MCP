@@ -1,0 +1,84 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.1.0/schema.json",
+  "name": "kpi",
+  "position": {
+    "x": 20,
+    "y": 80,
+    "z": 200,
+    "width": 1240,
+    "height": 120,
+    "tabOrder": 200
+  },
+  "visual": {
+    "visualType": "cardVisual",
+    "query": {
+      "queryState": {
+        "Data": {
+          "projections": [
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "銷售"
+                    }
+                  },
+                  "Property": "營收"
+                }
+              },
+              "queryRef": "銷售.營收",
+              "nativeQueryRef": "營收",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "門市月目標"
+                    }
+                  },
+                  "Property": "目標營收"
+                }
+              },
+              "queryRef": "門市月目標.目標營收",
+              "nativeQueryRef": "目標營收",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "門市月目標"
+                    }
+                  },
+                  "Property": "達成率"
+                }
+              },
+              "queryRef": "門市月目標.達成率",
+              "nativeQueryRef": "達成率",
+              "active": true
+            },
+            {
+              "field": {
+                "Measure": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "門市月目標"
+                    }
+                  },
+                  "Property": "目標差額"
+                }
+              },
+              "queryRef": "門市月目標.目標差額",
+              "nativeQueryRef": "目標差額",
+              "active": true
+            }
+          ]
+        }
+      }
+    },
+    "drillFilterOtherVisuals": true
+  }
+}

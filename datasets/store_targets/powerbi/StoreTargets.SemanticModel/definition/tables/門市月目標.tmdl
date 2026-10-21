@@ -1,0 +1,60 @@
+/// 財務部每月門市營收目標（Excel）
+table '門市月目標'
+	lineageTag: 7c80d4d4-3765-51de-a059-4a15cdf55f00
+
+	/// 財務部設定的營收目標
+	measure '目標營收' = SUM ( '門市月目標'[目標營收] )
+		formatString: #,##0
+		lineageTag: 345e70f6-362c-5e98-8401-dc3674bd27fd
+
+	/// 營收 ÷ 目標營收
+	measure '達成率' = DIVIDE ( [營收], [目標營收] )
+		formatString: 0.0%;-0.0%;0.0%
+		lineageTag: bfd5a4c9-5486-596c-a4cc-22309727af5a
+
+	/// 營收 − 目標營收
+	measure '目標差額' = [營收] - [目標營收]
+		formatString: #,##0
+		lineageTag: 743b5f3f-f645-5b82-b4f8-53480fa8a588
+
+	column '門市代碼'
+		dataType: string
+		lineageTag: 977d9808-c4af-50e4-89eb-255ad21d80c8
+		summarizeBy: none
+		sourceColumn: 門市代碼
+
+		annotation SummarizationSetBy = Automatic
+
+	column '年月'
+		dataType: string
+		lineageTag: e2e7e182-e31f-5bcf-bc0e-65db5bfef363
+		summarizeBy: none
+		sourceColumn: 年月
+
+		annotation SummarizationSetBy = Automatic
+
+	column '目標營收'
+		dataType: decimal
+		formatString: #,##0
+		lineageTag: e0fb2331-d489-5d7b-be2a-61c243063c74
+		summarizeBy: sum
+		sourceColumn: 目標營收
+
+		annotation SummarizationSetBy = Automatic
+
+	partition '門市月目標' = m
+		mode: import
+		source =
+				let
+				    Source = Excel.Workbook(File.Contents(TargetWorkbook), null, true),
+				    SheetNav = Source{[Item = "門市月目標", Kind = "Sheet"]}[Data],
+				    Promoted = Table.PromoteHeaders(SheetNav, [PromoteAllScalars = true]),
+				    Typed = Table.TransformColumnTypes(Promoted, {
+				        {"門市代碼", type text},
+				        {"年月", type text},
+				        {"目標營收", Currency.Type}
+				    })
+				in
+				    Typed
+
+	annotation PBI_ResultType = Table

@@ -1,21 +1,23 @@
 """Import a report straight from a .pbix: no Power BI project (PBIP) export needed.
 
-    python -m analysis import-pbix REPORT.pbix --name NAME      opens the file in Power BI Desktop if needed
-    python -m analysis import-pbix --title "Sales" --name NAME  an already open report (window title)
+    python -m analysis import-pbix REPORT.pbix --name NAME              read from the file (no Power BI needed)
+    python -m analysis import-pbix REPORT.pbix --name NAME --desktop    read through Power BI Desktop instead
+    python -m analysis import-pbix --title "Sales" --name NAME          an already open report (window title)
 
-The data model inside a .pbix is compressed and not readable as such, so it is read from the engine that
-Power BI Desktop runs while the file is open ($SYSTEM.TMSCHEMA_* views): tables, columns, measures,
-relationships, Power Query partitions and parameters. The report pages come from the .pbix itself (a zip:
-Report/Layout, or Report/definition for PBIR). Written to datasets/NAME/:
+A .pbix is a zip. The report pages come from it directly (Report/Layout, or Report/definition for PBIR). The data
+model is compressed; by default PBIXRay decodes it and its metadata database (the tables behind the TMSCHEMA_*
+views): tables, columns, measures, relationships, Power Query partitions and parameters, and the imported data.
+With --desktop (or when the file cannot be decoded, e.g. encrypted by a sensitivity label) the same metadata is
+read from the engine Power BI Desktop runs while the file is open. Written to datasets/NAME/:
 
   powerbi/NAME.SemanticModel/definition/*.tmdl   the model, in the TMDL subset semantic.py reads
-  powerbi/NAME.Report/definition/pages/...       which measures and columns each visual uses
+  powerbi/NAME.Report/definition/pages/...       what each visual uses, its filters, position and formatting
   analysis.yaml                                  a DRAFT of the analysis settings, derived from the data:
                                                  fact table, date, dimensions and hierarchies, metric roles,
                                                  thresholds for the data volume. Review it before use.
 
-Snapshots for the dataset are then read from the open report with DAX (source: powerbi), so any data source
-the report uses works. Nothing leaves the machine.
+Snapshots then read the data stored in the .pbix (source: pbix) or, with --desktop, the open report through DAX
+(source: powerbi); either way any data source the report uses works. Nothing leaves the machine.
 """
 import json
 import re
@@ -31,7 +33,7 @@ import yaml
 
 from . import pbi
 from .dataset import ROOT
-from .semantic import dax_col, dax_table
+from .semantic import SQL_RESERVED, dax_col, dax_table
 
 DATA_TYPES = {"2": "string", "6": "int64", "8": "double", "9": "dateTime", "10": "decimal", "11": "boolean",
               "17": "binary"}
@@ -49,25 +51,71 @@ def tabs(text: str, n: int) -> str:
 
 
 # ------------------------------------------------------------------------------------------- model
+# The model's metadata: the same tables whether read from Power BI Desktop's engine (TMSCHEMA_* views) or from
+# the metadata database inside the .pbix (PBIXRay).
+METADATA = {
+    "tables": ("Table", ["ID", "Name", "Description", "IsHidden", "DataCategory"]),
+    "columns": ("Column", ["ID", "TableID", "ExplicitName", "InferredName", "SourceColumn", "ExplicitDataType",
+                           "InferredDataType", "Type", "IsHidden", "Description", "FormatString", "IsKey"]),
+    "measures": ("Measure", ["TableID", "Name", "Expression", "FormatString", "DisplayFolder", "Description"]),
+    "relationships": ("Relationship", ["FromTableID", "FromColumnID", "ToTableID", "ToColumnID", "IsActive",
+                                       "FromCardinality", "ToCardinality"]),
+    "partitions": ("Partition", ["TableID", "Name", "QueryDefinition"]),
+    "expressions": ("Expression", ["Name", "Expression", "Kind"]),
+}
+FLAGS = ("IsHidden", "IsKey", "IsActive")
+
+
 def read_model(port: int) -> dict:
-    t = pbi.dmv(port, "TMSCHEMA_TABLES", ["ID", "Name", "Description", "IsHidden", "DataCategory"])
-    c = pbi.dmv(port, "TMSCHEMA_COLUMNS", ["ID", "TableID", "ExplicitName", "InferredName", "SourceColumn",
-                                           "ExplicitDataType", "InferredDataType", "Type", "IsHidden",
-                                           "Description", "FormatString", "IsKey"])
-    m = pbi.dmv(port, "TMSCHEMA_MEASURES", ["TableID", "Name", "Expression", "FormatString", "DisplayFolder",
-                                            "Description"])
-    r = pbi.dmv(port, "TMSCHEMA_RELATIONSHIPS", ["FromTableID", "FromColumnID", "ToTableID", "ToColumnID",
-                                                 "IsActive", "FromCardinality", "ToCardinality"])
-    p = pbi.dmv(port, "TMSCHEMA_PARTITIONS", ["TableID", "Name", "QueryDefinition"])
-    e = pbi.dmv(port, "TMSCHEMA_EXPRESSIONS", ["Name", "Expression", "Kind"])
+    """The model of a report open in Power BI Desktop (its Analysis Services engine)."""
+    return build_model({k: pbi.dmv(port, f"TMSCHEMA_{v[0].upper()}S", v[1]) for k, v in METADATA.items()})
+
+
+def read_model_file(pbix: Path) -> dict:
+    """The model straight from the .pbix, without Power BI: PBIXRay decompresses the data model and reads the
+    metadata database inside it (the tables the TMSCHEMA_* views show)."""
+    src = open_pbix(pbix)._metadata.source
+    # older files name some columns differently; PBIXRay knows the variants
+    renamed = {"Type": src._column_type_col().split(".")[-1]} | {
+        c: src._rel_col(c).split(".")[-1] for c in METADATA["relationships"][1] if c.endswith(("ID", "Cardinality"))}
+    frames = {}
+    for key, (table, cols) in METADATA.items():
+        select = ", ".join(f"{renamed.get(c, c) if key in ('columns', 'relationships') else c} AS {c}"
+                           if src._has_column(table, renamed.get(c, c) if key in ("columns", "relationships") else c)
+                           else f"NULL AS {c}" for c in cols)
+        where = " WHERE SystemFlags = 0" if key == "tables" else ""  # not the engine's internal tables
+        df = src._db.query(f"SELECT {select} FROM [{table}]{where}").reindex(columns=cols)  # empty → no columns
+        # as the DMVs give them: text, flags as True / False, None when empty
+        frames[key] = pd.DataFrame({col: pd.Series([_dmv_text(v, col) for v in df[col]], dtype=object)
+                                    for col in cols})
+    return build_model(frames)
+
+
+def _dmv_text(v, col: str):
+    if v is None or (not isinstance(v, str) and pd.isna(v)):
+        return None
+    if col in FLAGS:
+        return "True" if int(v) else "False"
+    return str(int(v)) if isinstance(v, (int, float)) else v
+
+
+def open_pbix(pbix: Path):
+    from pbixray import PBIXRay
+    return PBIXRay(str(pbix))
+
+
+def build_model(f: dict) -> dict:
+    # plain rows, empty values as None (pandas may hold them as NaN, which is truthy)
+    t, c, m, r, p, e = ([{k: (None if isinstance(v, float) and v != v else v) for k, v in row.items()}
+                         for row in f[k].to_dict("records")] for k in METADATA)
     tables = {}
-    for _, row in t.iterrows():
+    for row in t:
         if AUTO_TABLES.match(row["Name"]):
             continue  # Power BI's hidden auto date/time tables
         tables[row["ID"]] = {"name": row["Name"], "description": row["Description"] or "", "columns": {},
                              "measures": [], "partitions": [], "date_table": row["DataCategory"] == "Time"}
     columns = {}
-    for _, row in c.iterrows():
+    for row in c:
         if row["TableID"] not in tables or row["Type"] == "3":  # 3 = RowNumber
             continue
         dtype = row["ExplicitDataType"] if row["ExplicitDataType"] not in (None, "1") else row["InferredDataType"]
@@ -77,21 +125,21 @@ def read_model(port: int) -> dict:
                "key": row["IsKey"] == "True", "calculated": row["Type"] == "2"}
         tables[row["TableID"]]["columns"][row["ID"]] = col
         columns[row["ID"]] = (tables[row["TableID"]]["name"], col["name"])
-    for _, row in m.iterrows():
+    for row in m:
         if row["TableID"] in tables:
             tables[row["TableID"]]["measures"].append(
                 {"name": row["Name"], "expression": row["Expression"] or "", "format": row["FormatString"] or "",
                  "folder": row["DisplayFolder"] or "", "description": row["Description"] or ""})
-    for _, row in p.iterrows():
+    for row in p:
         if row["TableID"] in tables:
             tables[row["TableID"]]["partitions"].append({"name": row["Name"], "m": row["QueryDefinition"] or ""})
     rels = []
-    for _, row in r.iterrows():
+    for row in r:
         if row["FromColumnID"] in columns and row["ToColumnID"] in columns:
             rels.append({"from": columns[row["FromColumnID"]], "to": columns[row["ToColumnID"]],
                          "active": row["IsActive"] == "True", "from_many": row["FromCardinality"] == "2",
                          "to_one": row["ToCardinality"] == "1"})
-    exprs = [{"name": row["Name"], "expression": row["Expression"] or ""} for _, row in e.iterrows() if row["Kind"] == "0"]
+    exprs = [{"name": row["Name"], "expression": row["Expression"] or ""} for row in e if row["Kind"] == "0"]
     return {"tables": list(tables.values()), "relationships": rels, "expressions": exprs}
 
 
@@ -259,6 +307,8 @@ def reachable(model: dict, fact: str) -> dict[str, list]:
 
 def slug(name: str, used: set) -> str:
     base = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "dim"
+    if base.upper() in SQL_RESERVED or base[0].isdigit():  # keys become column names in the snapshot SQL
+        base = f"{base}_dim"
     key, i = base, 2
     while key in used:
         key, i = f"{base}_{i}", i + 1
@@ -266,12 +316,136 @@ def slug(name: str, used: set) -> str:
     return key
 
 
-def draft_config(model: dict, port: int, title: str) -> tuple[dict, list[str]]:
+class DaxProbe:
+    """Questions about the data, answered with DAX by the report open in Power BI Desktop."""
+
+    def __init__(self, port: int):
+        self.port = port
+
+    def stats(self, fact: str, date_ref: tuple, cands: list[tuple]) -> tuple[float, float, dict]:
+        exprs = [f'"c{i}", DISTINCTCOUNT({dax_col(t, c)})' for i, (t, c) in enumerate(cands)]
+        rows_dax = f"COUNTROWS({dax_table(fact)})"
+        days_dax = f"COUNTROWS(FILTER(VALUES({dax_col(*date_ref)}), NOT ISBLANK(CALCULATE({rows_dax}))))"
+        res = pbi.run_dax(self.port, [f'EVALUATE ROW("rows", {rows_dax}, "days", {days_dax}'
+                                      f'{", " if exprs else ""}{", ".join(exprs)})'])[0]
+        if "error" in res:
+            raise SystemExit(res["error"])
+        values = [float(v or 0) for v in res["rows"][0]]
+        return values[0], values[1], {cands[i]: int(v) for i, v in enumerate(values[2:])}
+
+    def pair_counts(self, pairs: list[tuple]) -> list[int | None]:
+        res = pbi.run_dax(self.port, ["EVALUATE ROW(" + ", ".join(
+            f'"p{i}", COUNTROWS(SUMMARIZE({dax_table(a[0])}, {dax_col(*a)}, {dax_col(*b)}))'
+            for i, (a, b) in enumerate(pairs)) + ")"])[0]
+        return [int(float(n or 0)) for n in res["rows"][0]] if "rows" in res else [None] * len(pairs)
+
+    def daily_minimum(self, fact: str, date_ref: tuple, measures: list[str]) -> dict[str, float | None]:
+        res = pbi.run_dax(self.port, ["EVALUATE ROW(" + ", ".join(
+            f'"m{i}", MINX(VALUES({dax_col(*date_ref)}), [{m}])' for i, m in enumerate(measures)) + ")"])[0]
+        if "rows" not in res:
+            return {}
+        return {m: (None if v is None else float(v)) for m, v in zip(measures, res["rows"][0])}
+
+
+class FileProbe:
+    """The same questions answered from the tables stored in the .pbix (PBIXRay → DuckDB) and the model already
+    written as TMDL: measures are evaluated per day through their translation to SQL (semantic.py)."""
+
+    def __init__(self, pbix: Path, pbip_dir: Path):
+        import duckdb
+        from . import semantic, sources
+        self.semantic = semantic
+        self.model = semantic.load(pbip_dir)
+        self.db = duckdb.connect()
+        px = open_pbix(pbix)
+        for t in self.model.tables.values():
+            sources.register_table(self.db, px.get_table(t.name), self.src(t.name),
+                                   {c.name: c.source_column for c in t.columns.values() if c.source_column})
+
+    def src(self, table: str) -> str:
+        return self.model.tables[table].source_table or table
+
+    def col(self, table: str, column: str) -> str:
+        c = self.model.tables[table].columns[column]
+        return self.semantic.ident(c.source_column or column)
+
+    def one(self, sql: str):
+        return self.db.execute(sql).fetchone()
+
+    def joins(self, fact: str, tables: set[str]) -> tuple[str, dict[str, str]]:
+        """FROM fact LEFT JOIN … along the many-to-one paths to the given tables (as store.py joins)."""
+        ident = self.semantic.ident
+        alias, sql = {fact: "f"}, f"FROM {ident(self.src(fact))} f"
+        for target in sorted(tables - {fact}):
+            for r in self.model.join_path(fact, target):
+                if r.to_table not in alias:
+                    alias[r.to_table] = f"t{len(alias)}"
+                    sql += (f" LEFT JOIN {ident(self.src(r.to_table))} {alias[r.to_table]} ON "
+                            f"{alias[r.from_table]}.{self.col(r.from_table, r.from_column)} = "
+                            f"{alias[r.to_table]}.{self.col(r.to_table, r.to_column)}")
+        return sql, alias
+
+    def stats(self, fact: str, date_ref: tuple, cands: list[tuple]) -> tuple[float, float, dict]:
+        ident = self.semantic.ident
+        rows = self.one(f"SELECT COUNT(*) FROM {ident(self.src(fact))}")[0]
+        frm, alias = self.joins(fact, {date_ref[0]})
+        days = self.one(f"SELECT COUNT(DISTINCT {alias[date_ref[0]]}.{self.col(*date_ref)}) {frm}")[0]
+        card = {(t, c): self.one(f"SELECT COUNT(DISTINCT {self.col(t, c)}) FROM {ident(self.src(t))}")[0]
+                for t, c in cands}
+        return float(rows), float(days), card
+
+    def pair_counts(self, pairs: list[tuple]) -> list[int | None]:
+        ident = self.semantic.ident
+        return [self.one(f"SELECT COUNT(*) FROM (SELECT DISTINCT {self.col(*a)}, {self.col(*b)} "
+                         f"FROM {ident(self.src(a[0]))})")[0] for a, b in pairs]
+
+    def daily_minimum(self, fact: str, date_ref: tuple, measures: list[str]) -> dict[str, float | None]:
+        """Lowest daily value of each measure that translates to SQL (the others are left out)."""
+        formulas, bases, _ = self.semantic.translate_all(self.model, fact)
+        wanted = [m for m in measures if m in formulas]
+        if not wanted:
+            return {}
+        used = sorted({b for m in wanted for b in formulas[m].bases})
+        frm, alias = self.joins(fact, {date_ref[0]} | {t for b in used for t in bases[b].tables})
+        aggs = [re.sub(r"@@(.+?)@@", lambda x: alias[x.group(1)], bases[b].sql) + f' AS "{b}"' for b in used]
+        day = f"{alias[date_ref[0]]}.{self.col(*date_ref)}"
+        df = self.db.execute(f"SELECT {day} AS d, {', '.join(aggs)} {frm} WHERE {day} IS NOT NULL GROUP BY {day}").df()
+        div = lambda a, b: a / b if b else None  # noqa: E731
+        out = {}
+        for m in wanted:
+            values = []
+            for row in df.to_dict("records"):
+                try:
+                    v = eval(formulas[m].expr, {"div": div}, {k: float(x or 0) for k, x in row.items() if k != "d"})
+                except TypeError:  # a division by zero inside the formula (DAX gives BLANK)
+                    v = None
+                if v is not None:
+                    values.append(v)
+            out[m] = min(values) if values else None
+        return out
+
+
+def draft_config(model: dict, probe, title: str, source: dict) -> tuple[dict, list[str]]:
+    """Analysis settings inferred from the model and the data; probe answers the questions about the data
+    (DaxProbe: the open report's engine; FileProbe: the tables inside the .pbix)."""
     notes = []
     by_name = {t["name"]: t for t in model["tables"]}
     many = {t["name"]: sum(1 for r in model["relationships"] if r["from"][0] == t["name"] and r["from_many"])
             for t in model["tables"]}
-    fact = max(model["tables"], key=lambda t: (many[t["name"]], len(t["measures"]), len(t["columns"])))["name"]
+    # the table the measures aggregate (Table[Column] in their DAX, or a bare [Column] of the measure's own table):
+    # in models without relationships, or with measures kept on another table, this is the fact
+    aggregated = {t["name"]: 0 for t in model["tables"]}
+    for t in model["tables"]:
+        for m in t["measures"]:
+            for table, col in re.findall(r"(?:'((?:[^']|'')+)'|\b([A-Za-z_][\w]*))\s*\[", m["expression"]):
+                name = (table or col).replace("''", "'")
+                if name in aggregated:
+                    aggregated[name] += 1
+            own = {c["name"] for c in t["columns"].values()}
+            aggregated[t["name"]] += sum(1 for ref in re.findall(r"(?<![\w'\]])\[([^\]]+)\]", m["expression"])
+                                         if ref in own)
+    fact = max(model["tables"], key=lambda t: (many[t["name"]], aggregated[t["name"]], len(t["measures"]),
+                                               len(t["columns"])))["name"]
     tables = reachable(model, fact)
     notes.append(f"事實表：{fact}（多對一關聯 {many[fact]} 條、量值 {len(by_name[fact]['measures'])} 個）")
 
@@ -293,22 +467,13 @@ def draft_config(model: dict, port: int, title: str) -> tuple[dict, list[str]]:
     if not date_ref:
         raise SystemExit("找不到日期欄位：分析需要一個與事實表相關的日期欄位")
     notes.append(f"日期：{date_ref[0]}[{date_ref[1]}]")
-    date_col = dax_col(*date_ref)
 
     # candidate dimensions: visible text columns on reachable tables (not ids/codes), sized by cardinality
     cands = [(t, c["name"]) for t in tables for c in by_name[t]["columns"].values()
-             if c["type"] == "string" and not c["hidden"] and not CODE_LIKE.search(c["name"]) and t != date_ref[0]]
-    exprs = [f'"c{i}", DISTINCTCOUNT({dax_col(t, c)})' for i, (t, c) in enumerate(cands)]
-    rows_dax = f"COUNTROWS({dax_table(fact)})"
-    days_dax = f"COUNTROWS(FILTER(VALUES({date_col}), NOT ISBLANK(CALCULATE({rows_dax}))))"  # days with data
-    stats_q = (f'EVALUATE ROW("rows", {rows_dax}, "days", {days_dax}{", " if exprs else ""}'
-               f'{", ".join(exprs)})')
-    first = pbi.run_dax(port, [stats_q])[0]
-    if "error" in first:
-        raise SystemExit(first["error"])
-    values = [float(v or 0) for v in first["rows"][0]]
-    rows_per_day = values[0] / max(values[1], 1)
-    card = {cands[i]: int(v) for i, v in enumerate(values[2:])}
+             if c["type"] == "string" and not c["hidden"] and not CODE_LIKE.search(c["name"])
+             and (t != date_ref[0] or t == fact)]  # a date table is no dimension; the fact itself may hold the date
+    rows, days, card = probe.stats(fact, date_ref, cands)
+    rows_per_day = rows / max(days, 1)
     dims = [(t, c) for (t, c), n in card.items() if 2 <= n <= 200]
     item = max(((t, c) for (t, c), n in card.items() if 200 < n <= 20000), key=lambda x: card[x], default=None)
     notes.append(f"資料量：平均每天 {rows_per_day:,.0f} 列明細")
@@ -321,13 +486,9 @@ def draft_config(model: dict, port: int, title: str) -> tuple[dict, list[str]]:
     pairs = [(a, b) for a in dims for b in dims if a[0] == b[0] and card[a] < card[b]]
     parent = {}
     if pairs:
-        pq = "EVALUATE ROW(" + ", ".join(f'"p{i}", COUNTROWS(SUMMARIZE({dax_table(a[0])}, {dax_col(*a)}, {dax_col(*b)}))'
-                                          for i, (a, b) in enumerate(pairs)) + ")"
-        res = pbi.run_dax(port, [pq])[0]
-        if "rows" in res:
-            for (a, b), n in zip(pairs, res["rows"][0]):
-                if int(float(n or 0)) == card[b] and (b not in parent or card[a] > card[parent[b]]):
-                    parent[b] = a
+        for (a, b), n in zip(pairs, probe.pair_counts(pairs)):
+            if n == card[b] and (b not in parent or card[a] > card[parent[b]]):
+                parent[b] = a
     used: set = set()
     keys = {d: slug(d[1], used) for d in dims}
     def label(t: str, c: str) -> str:
@@ -355,13 +516,11 @@ def draft_config(model: dict, port: int, title: str) -> tuple[dict, list[str]]:
         hit = next((m for m in measures if re.search(pattern, m, re.I)), None)
         if hit:
             roles[role] = hit
-    signed = []
-    if amounts:
-        neg_q = "EVALUATE ROW(" + ", ".join(
-            f'"m{i}", MINX(VALUES({date_col}), [{m}])' for i, m in enumerate(amounts)) + ")"
-        res = pbi.run_dax(port, [neg_q])[0]
-        if "rows" in res:
-            signed = [m for m, v in zip(amounts, res["rows"][0]) if v is not None and float(v) < 0]
+    lowest = probe.daily_minimum(fact, date_ref, amounts) if amounts else {}
+    signed = [m for m in amounts if lowest.get(m) is not None and lowest[m] < 0]
+    unchecked = [m for m in amounts if m not in lowest]
+    if unchecked:
+        notes.append("無法逐日計算、沒有檢查是否可能為負：" + "、".join(unchecked))
     if signed:
         roles["signed"] = signed
     notes.append("指標角色：" + "、".join(f"{k}={v}" for k, v in roles.items() if k != "signed")
@@ -370,8 +529,9 @@ def draft_config(model: dict, port: int, title: str) -> tuple[dict, list[str]]:
     small = rows_per_day < 300
     roots = [keys[d] for d in dims if d not in parent][:4]
     config = {
-        "description": f"{title}（由 .pbix 匯入，資料從開啟中的 Power BI 報表讀取）",
-        "source": {"kind": "powerbi", "title": title},
+        "description": f"{title}（由 .pbix 匯入，" + ("資料直接從 .pbix 檔讀取）" if source["kind"] == "pbix"
+                                                   else "資料從開啟中的 Power BI 報表讀取）"),
+        "source": source,
         "fact": fact,
         "date": f"{date_ref[0]}.{date_ref[1]}",
         "dimensions": dimensions,
@@ -427,22 +587,33 @@ def open_report(pbix: Path, wait: int = 300) -> tuple[int, str]:
     return int(found[0]["port"]), title
 
 
-def main(file: str | None, name: str, port: int | None, title: str | None) -> None:
+def main(file: str | None, name: str, port: int | None, title: str | None, desktop: bool = False) -> None:
     pbix = Path(file).resolve() if file else None
-    if port is None:
-        if pbix:
-            port, title = open_report(pbix)
-        else:
-            port = pbi.find_port(title)
-    title = title or (pbix.stem if pbix else name)
     home = ROOT / "datasets" / name
     out = home / "powerbi"
-    model = read_model(port)
+    model = None
+    if pbix and port is None and not title and not desktop:
+        try:  # straight from the file: no Power BI needed
+            model = read_model_file(pbix)
+            source = {"kind": "pbix", "file": str(pbix)}
+            print(f"read from the file (PBIXRay): {pbix.name}")
+        except Exception as e:  # encrypted (sensitivity label), a format PBIXRay does not know …
+            print(f"cannot read {pbix.name} directly ({type(e).__name__}: {e}); opening it in Power BI Desktop")
+    if model is None:
+        if port is None:
+            if pbix:
+                port, title = open_report(pbix)
+            else:
+                port = pbi.find_port(title)
+        model = read_model(port)
+        source = {"kind": "powerbi", "title": title or (pbix.stem if pbix else name)}
+    title = title or (pbix.stem if pbix else name)
     write_model(model, out / f"{name}.SemanticModel")
     visuals = write_report(pbix, out / f"{name}.Report")
     print(f"model: {len(model['tables'])} tables, {sum(len(t['measures']) for t in model['tables'])} measures, "
           f"{len(model['relationships'])} relationships; report: {visuals} visuals")
-    config, notes = draft_config(model, port, title)
+    probe = FileProbe(pbix, out) if source["kind"] == "pbix" else DaxProbe(port)
+    config, notes = draft_config(model, probe, title, source)
     target = home / "analysis.yaml"
     if target.exists():
         target = home / "analysis.draft.yaml"

@@ -175,7 +175,7 @@ def snapshot(ctx: Context, d0: date, d1: date, verbose: bool = True) -> None:
             if etl_sql:
                 _replace(db, "etl_log", _fetch(conn, etl_sql, start, end), start, end)
             cal = _calendar(ctx, conn, start, end)
-            cal["holiday"] = cal["holiday"].astype("object")
+            cal["holiday"] = cal["holiday"].astype("string")
             _replace(db, "calendar", cal, start, end)
             log = (orders.groupby("business_date")["rows"].sum().rename("fact_rows").reset_index()
                    if not orders.empty else pd.DataFrame(columns=["business_date", "fact_rows"]))
@@ -210,7 +210,7 @@ def snapshot_from_powerbi(ctx: Context, d0: date, d1: date, verbose: bool = True
             if etl is not None:
                 _replace(db, "etl_log", etl, start, end)
             cal = src.calendar(start, end)
-            cal["holiday"] = cal["holiday"].astype("object")
+            cal["holiday"] = cal["holiday"].astype("string")
             _replace(db, "calendar", cal, start, end)
             log = (orders.groupby("business_date")["rows"].sum().rename("fact_rows").reset_index()
                    if not orders.empty else pd.DataFrame(columns=["business_date", "fact_rows"]))

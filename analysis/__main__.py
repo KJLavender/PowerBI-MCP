@@ -6,7 +6,8 @@
   python -m analysis evaluate [--start D] [--end D]   score against scenarios/scenarios.yaml
   python -m analysis model                            show what was read from the Power BI project
   python -m analysis reconcile [--port P]             compare with the numbers Power BI Desktop computes (DAX)
-  python -m analysis import-pbix FILE.pbix --name N   new dataset from a .pbix (model read from Power BI Desktop)
+  python -m analysis import-pbix FILE.pbix --name N   new dataset from a .pbix (read from the file; --desktop: via
+                                                      Power BI Desktop)
   python -m analysis intent [REPORT]                  what the author emphasises (rules, target lines, highlights)
   python -m analysis catalog [--no-data]              all reports in one graph: shared sources, same / clashing
                                                       measures, key matches between systems → reports/catalog.md
@@ -91,7 +92,13 @@ def cmd_intent(args) -> None:
     if not path.exists():  # a dataset name
         path = next((dataset.ROOT / "powerbi" if target == "retail" else
                      dataset.ROOT / "datasets" / target / "powerbi").glob("*.Report"))
-    items = intent.extract(path)
+    from . import semantic
+    try:  # thresholds of percentage measures read 45% rather than 0.45
+        model = semantic.load(path.parent) if path.suffix != ".pbix" else None
+        percent = {m.name for m in model.measures.values() if "%" in m.format_string} if model else set()
+    except (StopIteration, FileNotFoundError):
+        percent = set()
+    items = intent.extract(path, percent)
     text = intent.to_markdown(items, path.stem)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
@@ -133,7 +140,9 @@ def main() -> None:
     s.add_argument("--name", required=True)
     s.add_argument("--port", type=int)
     s.add_argument("--title")
-    s.set_defaults(func=lambda a: __import__("analysis.pbix", fromlist=["main"]).main(a.file, a.name, a.port, a.title))
+    s.add_argument("--desktop", action="store_true", help="read the model through Power BI Desktop, not the file")
+    s.set_defaults(func=lambda a: __import__("analysis.pbix", fromlist=["main"]).main(a.file, a.name, a.port, a.title,
+                                                                                     a.desktop))
     s = sub.add_parser("intent", help="what the report's author emphasises")
     s.add_argument("report", nargs="?", help="dataset name, .pbix file or *.Report folder (default: PBI_DATASET)")
     s.add_argument("--out")

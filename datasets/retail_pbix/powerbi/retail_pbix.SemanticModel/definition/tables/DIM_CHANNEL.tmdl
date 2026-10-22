@@ -1,34 +1,39 @@
 /// 銷售通路
 table DIM_CHANNEL
 
-	/// nan
 	column CHANNEL_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: CHANNEL_ID
 
-	/// nan
 	column CHANNEL_CODE
 		dataType: string
 		isHidden
-		formatString: nan
 		sourceColumn: CHANNEL_CODE
 
 	/// 通路：門市 / 官網 / 電商平台
 	column CHANNEL_NAME
 		dataType: string
-		formatString: nan
 		sourceColumn: CHANNEL_NAME
 
 	/// 實體 / 線上
 	column CHANNEL_TYPE
 		dataType: string
-		formatString: nan
 		sourceColumn: CHANNEL_TYPE
 
 	partition DIM_CHANNEL = m
 		mode: import
 		source =
-				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "DIM_CHANNEL"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"CHANNEL_ID", Int64.Type},         {"CHANNEL_CODE", type text},         {"CHANNEL_NAME", type text},         {"CHANNEL_TYPE", type text}     }) in     Typed
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_CHANNEL"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"CHANNEL_ID", Int64.Type},
+				        {"CHANNEL_CODE", type text},
+				        {"CHANNEL_NAME", type text},
+				        {"CHANNEL_TYPE", type text}
+				    })
+				in
+				    Typed
 

@@ -100,49 +100,36 @@ table FACT_SALES
 	column ORDER_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: ORDER_ID
 
-	/// nan
 	column LINE_NO
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: LINE_NO
 
-	/// nan
 	column DATE_KEY
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: DATE_KEY
 
-	/// nan
 	column STORE_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: STORE_ID
 
-	/// nan
 	column CHANNEL_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: CHANNEL_ID
 
-	/// nan
 	column PRODUCT_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: PRODUCT_ID
 
-	/// nan
 	column CUSTOMER_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: CUSTOMER_ID
 
 	/// 銷售數量
@@ -178,5 +165,24 @@ table FACT_SALES
 	partition FACT_SALES = m
 		mode: import
 		source =
-				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "FACT_SALES"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"ORDER_ID", Int64.Type},         {"LINE_NO", Int64.Type},         {"DATE_KEY", Int64.Type},         {"STORE_ID", Int64.Type},         {"CHANNEL_ID", Int64.Type},         {"PRODUCT_ID", Int64.Type},         {"CUSTOMER_ID", Int64.Type},         {"QUANTITY", Int64.Type},         {"UNIT_PRICE", Currency.Type},         {"DISCOUNT_AMOUNT", Currency.Type},         {"SALES_AMOUNT", Currency.Type},         {"COST_AMOUNT", Currency.Type}     }) in     Typed
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "FACT_SALES"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"ORDER_ID", Int64.Type},
+				        {"LINE_NO", Int64.Type},
+				        {"DATE_KEY", Int64.Type},
+				        {"STORE_ID", Int64.Type},
+				        {"CHANNEL_ID", Int64.Type},
+				        {"PRODUCT_ID", Int64.Type},
+				        {"CUSTOMER_ID", Int64.Type},
+				        {"QUANTITY", Int64.Type},
+				        {"UNIT_PRICE", Currency.Type},
+				        {"DISCOUNT_AMOUNT", Currency.Type},
+				        {"SALES_AMOUNT", Currency.Type},
+				        {"COST_AMOUNT", Currency.Type}
+				    })
+				in
+				    Typed
 

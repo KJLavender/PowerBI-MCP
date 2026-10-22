@@ -6,6 +6,7 @@
 Both give a DB-API style connection that accepts the same SQL (named parameters :d0 / :d1),
 so snapshots are taken with one code path whatever the source.
 """
+import decimal
 import re
 from datetime import date, timedelta
 from pathlib import Path
@@ -128,7 +129,45 @@ class ExcelSource:
         self.db.close()
 
 
+class PbixSource(ExcelSource):
+    """The data stored inside a .pbix (what Power BI imported, after Power Query), read without Power BI: PBIXRay
+    decodes the tables, which become DuckDB tables named like the model's sources so store.py's SQL runs as is."""
+
+    def __init__(self, ctx: Context):
+        self.db = duckdb.connect()
+        self._res = None
+        path = Path(ctx.source["file"])
+        if not path.exists():
+            path = dataset.HOME / path.name
+        from pbixray import PBIXRay
+        px = PBIXRay(str(path))
+        for t in ctx.model.tables.values():
+            if t.name in needed_tables(ctx):
+                register_table(self.db, px.get_table(t.name), t.source_table or t.name,
+                               {c.name: c.source_column for c in t.columns.values() if c.source_column})
+
+
+def register_table(db, df: pd.DataFrame, name: str, renames: dict[str, str]) -> None:
+    """A model table as a DuckDB table under its source name, columns under their source column names."""
+    df = df.rename(columns={k: v for k, v in renames.items() if k in df.columns and k != v})
+    for col in df.columns:  # fixed-decimal (currency) columns come as Decimal objects: as floats, like the snapshots
+        first = df[col].dropna().head(1)
+        if df[col].dtype == object and len(first) and isinstance(first.iloc[0], decimal.Decimal):
+            df[col] = pd.to_numeric(df[col]).astype("float64")
+    db.register("_pbix_table", df)
+    db.execute(f"CREATE OR REPLACE TABLE {ident(name)} AS SELECT * FROM _pbix_table")
+    db.unregister("_pbix_table")
+
+
+def needed_tables(ctx: Context) -> set[str]:
+    return {ctx.fact} | {d.table for d in ctx.dims.values()} | {ctx.date_dim.table} | \
+        {t for b in ctx.bases.values() for t in b.tables} | {c[0] for c in ctx.report_filters} | \
+        ({ctx.dq["etl_table"]} if ctx.dq.get("etl_table") else set())
+
+
 def connect(ctx: Context):
+    if ctx.source["kind"] == "pbix":
+        return PbixSource(ctx)
     if ctx.source["kind"] in ("excel", "csv"):
         return ExcelSource(ctx)
     from simulator.db import connect as oracle_connect
@@ -139,8 +178,15 @@ def date_range(ctx: Context) -> tuple[date, date]:
     """First and last business date available in the source."""
     if ctx.source["kind"] == "powerbi":
         return PowerBISource(ctx).date_range()
+    if ctx.source["kind"] == "pbix":  # the days the fact table has rows (the date table may span more years)
+        from .store import _from_clause
+        from_sql, alias = _from_clause(ctx, [ctx.date_dim])
+        col = f"{alias[ctx.date_dim.table]}.{ident(ctx.date_dim.source_column)}"
+        with connect(ctx) as src:
+            lo, hi = src.execute(f"SELECT min({col}), max({col}) {from_sql}").fetchone()
+        return pd.Timestamp(lo).date(), pd.Timestamp(hi).date()
     if ctx.source["kind"] in ("excel", "csv"):
-        with ExcelSource(ctx) as src:
+        with connect(ctx) as src:
             t = ctx.model.tables[ctx.date_dim.table]
             col = ident(ctx.date_dim.source_column)
             lo, hi = src.execute(f"SELECT min({col}), max({col}) FROM {ident(t.source_table or t.name)}").fetchone()

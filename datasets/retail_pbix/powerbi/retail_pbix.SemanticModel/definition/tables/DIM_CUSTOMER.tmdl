@@ -1,41 +1,34 @@
 /// 顧客。每個區域有一筆「非會員」虛擬顧客，代表未登入會員的門市消費
 table DIM_CUSTOMER
 
-	/// nan
 	column CUSTOMER_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: CUSTOMER_ID
 
 	/// 顧客代碼
 	column CUSTOMER_CODE
 		dataType: string
-		formatString: nan
 		sourceColumn: CUSTOMER_CODE
 
 	/// 顧客分群：非會員 / 一般會員 / VIP
 	column SEGMENT
 		dataType: string
-		formatString: nan
 		sourceColumn: SEGMENT
 
 	/// 性別
 	column GENDER
 		dataType: string
-		formatString: nan
 		sourceColumn: GENDER
 
 	/// 年齡層
 	column AGE_GROUP
 		dataType: string
-		formatString: nan
 		sourceColumn: AGE_GROUP
 
 	/// 會員居住區域
 	column HOME_REGION_NAME
 		dataType: string
-		formatString: nan
 		sourceColumn: HOME_REGION_NAME
 
 	/// 入會日
@@ -47,5 +40,19 @@ table DIM_CUSTOMER
 	partition DIM_CUSTOMER = m
 		mode: import
 		source =
-				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "DIM_CUSTOMER"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"CUSTOMER_ID", Int64.Type},         {"CUSTOMER_CODE", type text},         {"SEGMENT", type text},         {"GENDER", type text},         {"AGE_GROUP", type text},         {"HOME_REGION_NAME", type text},         {"JOIN_DATE", type date}     }) in     Typed
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_CUSTOMER"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"CUSTOMER_ID", Int64.Type},
+				        {"CUSTOMER_CODE", type text},
+				        {"SEGMENT", type text},
+				        {"GENDER", type text},
+				        {"AGE_GROUP", type text},
+				        {"HOME_REGION_NAME", type text},
+				        {"JOIN_DATE", type date}
+				    })
+				in
+				    Typed
 

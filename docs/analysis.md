@@ -65,7 +65,10 @@ Oracle ──(依關聯自動產生 SQL)──► store.py ──► DuckDB 每�
 | 非作用中關聯、雙向篩選、多對多 | 不使用；需要它們的量值會列為無法分析 |
 | 量值：SUM、DISTINCTCOUNT、COUNTROWS、SUMX、DIVIDE、四則運算、引用其他量值 | 翻譯成公式，SQL 與 DAX 兩種寫法都有 |
 | 量值：`CALCULATE(…, 欄位 = 值 / IN {…} / NOT …)` | 翻譯成「條件彙總」；依該篩選欄位切分時，Power BI 每個成員都顯示同一個值，所以不依它分析並說明原因 |
-| 量值：時間智慧（DATEADD、SAMEPERIODLASTYEAR、TOTALMTD…）、FILTER、ALL | 列為「無法分析」，不會亂算（期間比較由引擎自己做） |
+| 量值：時間智慧（DATEADD、SAMEPERIODLASTYEAR、TOTALMTD…）、FILTER、ALL | 不列入變化分析（期間比較由引擎自己做）；解釋畫面上的圖時（`explain_visual`），DATEADD / SAMEPERIODLASTYEAR / TOTALMTD 依報表的日期範圍平移後計算，見 [visuals.md](visuals.md) |
+| 量值：`SUM([欄位])` 沒寫資料表、`IF(x <> 0, y / x, BLANK())` | 欄位指量值所在的資料表；這種 IF 就是安全除法，等同 DIVIDE。其他 IF 列為無法分析 |
+| 量值放在別的資料表上 | 事實表本身沒有量值、量值放在專用的量值表（沒有可見欄位），或那張表沒有任何關聯時，視為事實表的量值；有關聯的資料表（例如 ETL 紀錄）上的量值描述那張表，不列入分析 |
+| 計算欄位（DAX，沒有來源欄位） | .pbix 裡存有算好的值，直接讀檔時照名稱讀；照 Power Query 讀來源時沒有這個欄位 |
 | 不重複計數的鍵跨多天（例如不重複會員數） | 每天的不重複數不能加總成一段期間，所以不做期間比較並說明原因 |
 | Excel：多個工作表、Excel 表格物件、公式 | 公式讀的是 Excel 存檔時的計算結果，和 Power BI 一樣 |
 | CSV（`Csv.Document`） | 依分隔符號、編碼讀取 |

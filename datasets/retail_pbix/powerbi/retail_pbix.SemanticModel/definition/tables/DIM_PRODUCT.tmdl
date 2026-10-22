@@ -1,35 +1,29 @@
 /// 商品
 table DIM_PRODUCT
 
-	/// nan
 	column PRODUCT_ID
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: PRODUCT_ID
 
 	/// 商品代碼
 	column PRODUCT_CODE
 		dataType: string
-		formatString: nan
 		sourceColumn: PRODUCT_CODE
 
 	/// 商品名稱
 	column PRODUCT_NAME
 		dataType: string
-		formatString: nan
 		sourceColumn: PRODUCT_NAME
 
 	/// 商品大類
 	column CATEGORY
 		dataType: string
-		formatString: nan
 		sourceColumn: CATEGORY
 
 	/// 品牌
 	column BRAND
 		dataType: string
-		formatString: nan
 		sourceColumn: BRAND
 
 	/// 牌價
@@ -47,5 +41,19 @@ table DIM_PRODUCT
 	partition DIM_PRODUCT = m
 		mode: import
 		source =
-				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "DIM_PRODUCT"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"PRODUCT_ID", Int64.Type},         {"PRODUCT_CODE", type text},         {"PRODUCT_NAME", type text},         {"CATEGORY", type text},         {"BRAND", type text},         {"LIST_PRICE", Currency.Type},         {"STD_COST", Currency.Type}     }) in     Typed
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "DIM_PRODUCT"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"PRODUCT_ID", Int64.Type},
+				        {"PRODUCT_CODE", type text},
+				        {"PRODUCT_NAME", type text},
+				        {"CATEGORY", type text},
+				        {"BRAND", type text},
+				        {"LIST_PRICE", Currency.Type},
+				        {"STD_COST", Currency.Type}
+				    })
+				in
+				    Typed
 

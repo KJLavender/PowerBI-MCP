@@ -23,6 +23,7 @@ class Column:
     source_column: str
     description: str = ""
     hidden: bool = False
+    calculated: bool = False  # no source column: a DAX calculated column (its values exist only in a .pbix)
 
 
 @dataclass
@@ -183,6 +184,9 @@ def parse_table(text: str) -> Table:
         i += 1
     if table and table.m:
         table.source, table.source_table = m_source(table.m)
+    for c in (table.columns.values() if table else []):
+        if not c.source_column:  # stored in the .pbix under its own name
+            c.source_column, c.calculated = c.name, True
     return table
 
 
@@ -391,9 +395,21 @@ def load(pbip_dir: Path = PBIP_DIR) -> SemanticModel:
     return SemanticModel(tables, rels, usage, expressions, report_filters, notes)
 
 
+SQL_RESERVED = {
+    "ALL", "AND", "ANY", "AS", "ASC", "BETWEEN", "BY", "CASE", "CAST", "CHECK", "COLUMN", "CONSTRAINT", "CREATE",
+    "CROSS", "CURRENT", "DATE", "DEFAULT", "DELETE", "DESC", "DISTINCT", "DROP", "ELSE", "END", "EXCEPT", "EXISTS",
+    "FALSE", "FETCH", "FOR", "FOREIGN", "FROM", "FULL", "GRANT", "GROUP", "HAVING", "IN", "INNER", "INSERT",
+    "INTERSECT", "INTO", "IS", "JOIN", "KEY", "LEFT", "LIKE", "LIMIT", "LEVEL", "NOT", "NULL", "OF", "OFFSET", "ON",
+    "OR", "ORDER", "OUTER", "PRIMARY", "REFERENCES", "RIGHT", "ROW", "ROWS", "SELECT", "SET", "SIZE", "TABLE",
+    "THEN", "TO", "TRUE", "UNION", "UNIQUE", "UPDATE", "USER", "USING", "VALUES", "WHEN", "WHERE", "WINDOW", "WITH",
+}
+
+
 def ident(name: str) -> str:
-    """SQL identifier: plain names stay as they are (Oracle upper-case columns), others are quoted."""
-    return name if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$#]*", name) else '"' + name.replace('"', '""') + '"'
+    """SQL identifier: plain names stay as they are (Oracle upper-case columns), others and reserved words
+    (a Group or Order column in a workbook / .pbix) are quoted."""
+    plain = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$#]*", name) and name.upper() not in SQL_RESERVED
+    return name if plain else '"' + name.replace('"', '""') + '"'
 
 
 def dax_table(name: str) -> str:
@@ -581,7 +597,11 @@ class Translator:
             return self.formulas[measure]
         m = self.model.measures[measure]
         self.tokens, self.i, self.refs, self.used = tokenize(m.expression), 0, [], []
-        expr = self._expr()
+        home, self.home = getattr(self, "home", None), m.table
+        try:
+            expr = self._expr()
+        finally:
+            self.home = home
         if self.i != len(self.tokens):
             raise Unsupported("trailing tokens")
         top = getattr(self, "_top_div", None)
@@ -631,12 +651,13 @@ class Translator:
             self.i += 1
             name = val[1:-1]
             if name not in self.model.measures:
-                raise Unsupported(f"unknown measure {name}")
+                raise Unsupported(f"unknown measure {name}" + ("（欄位要放在彙總函數裡）" if self._home_column(val) else ""))
             if self.cond:  # inside CALCULATE: expand the measure under the filters (not the cached formula)
-                saved = (self.tokens, self.i)
-                self.tokens, self.i = tokenize(self.model.measures[name].expression), 0
+                saved = (self.tokens, self.i, getattr(self, "home", None))
+                self.tokens, self.i, self.home = tokenize(self.model.measures[name].expression), 0, \
+                    self.model.measures[name].table
                 inner = self._expr()
-                self.tokens, self.i = saved
+                self.tokens, self.i, self.home = saved
                 self.refs.append(name)
                 return f"({inner})"
             saved = (self.tokens, self.i, self.refs, self.used)
@@ -653,7 +674,7 @@ class Translator:
         self.i += 1
         self._take("op", "(")
         if fn in ("SUM", "DISTINCTCOUNT"):
-            ref, col = self._col(self._take("colref")[1])
+            ref, col = self._col(self._colref_token())
             self._take("op", ")")
             if fn == "SUM":
                 name = self._base(f"sum_{safe_name(col)}", f"SUM(f.{ident(col)})", dax=f"SUM({ref})")
@@ -710,6 +731,23 @@ class Translator:
             self._top_div = saved_top
             del end
             return f"({inner})"
+        if fn == "IF":
+            cond = self._expr()
+            kind, op = self._take("cmp")
+            zero = self._take("num")[1]
+            self._take("op", ",")
+            then = self._expr()
+            if self._peek() == ("op", ","):
+                self.i += 1
+                self._take("func", "BLANK")
+                self._take("op", "(")
+                self._take("op", ")")
+            self._take("op", ")")
+            if op != "<>" or float(zero) != 0 or not (then.startswith("div(") and then.endswith(f", {cond})")):
+                raise Unsupported("IF is only read as a guarded division: IF(x <> 0, y / x, BLANK())")
+            if self.i == len(self.tokens):  # the whole measure: remember its parts, as for DIVIDE
+                self._top_div = (then[4:-len(cond) - 3], cond)
+            return then
         if fn == "DIVIDE":
             num = self._expr()
             self._take("op", ",")
@@ -719,6 +757,21 @@ class Translator:
                 self._top_div = (num, den)
             return f"div({num}, {den})"
         raise Unsupported(f"function {fn} not supported")
+
+    def _home_column(self, mref: str) -> str | None:
+        """[Column] without a table: a column of the measure's own table, written as 'Table'[Column]."""
+        home = getattr(self, "home", None)
+        if home and mref[1:-1] not in self.model.measures and mref[1:-1] in self.model.tables[home].columns:
+            return f"{dax_table(home)}{mref}"
+        return None
+
+    def _colref_token(self) -> str:
+        kind, val = self._take()
+        if kind == "colref":
+            return val
+        if kind == "mref" and (ref := self._home_column(val)):
+            return ref
+        raise Unsupported(f"expected a column, got {val!r}")
 
     def _row_expr(self) -> tuple[str, str]:
         """Row-level arithmetic over fact columns inside SUMX, rendered as SQL and as DAX."""
@@ -777,12 +830,19 @@ def translate_all(model: SemanticModel, fact: str) -> tuple[dict[str, Formula], 
     """Translate every measure on the fact table; returns formulas, bases and skip reasons."""
     tr = Translator(model, fact)
     skipped = {}
+    # measures kept on another table are analysed when they are only parked there: the fact has no measures, or
+    # the table holds no visible columns (e.g. "_Measures"), or it is not related to anything (it cannot filter);
+    # a related table's measures describe that table (e.g. an ETL log) and stay out of the analysis
+    fact_has = any(m.table == fact for m in model.measures.values())
+    related = {r.from_table for r in model.relationships} | {r.to_table for r in model.relationships}
+    parked = {t.name for t in model.tables.values()
+              if not any(not c.hidden for c in t.columns.values()) or t.name not in related}
     for name, m in model.measures.items():
-        if m.table != fact:
+        if m.table != fact and fact_has and m.table not in parked:
             continue
         try:
             tr.translate(name)
-        except (Unsupported, KeyError) as e:
-            skipped[name] = str(e)
+        except (Unsupported, KeyError, ValueError) as e:  # ValueError: a filtered table the fact cannot reach
             tr.formulas.pop(name, None)
+            skipped[name] = str(e)
     return tr.formulas, tr.bases, skipped

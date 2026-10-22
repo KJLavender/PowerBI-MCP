@@ -11,11 +11,9 @@ table ETL_BATCH_LOG
 		formatString: #,##0
 		displayFolder: 資料品質
 
-	/// nan
 	column BUSINESS_DATE_KEY
 		dataType: int64
 		isHidden
-		formatString: nan
 		sourceColumn: BUSINESS_DATE_KEY
 
 	/// 批次執行時間
@@ -33,17 +31,27 @@ table ETL_BATCH_LOG
 	/// 批次狀態
 	column STATUS
 		dataType: string
-		formatString: nan
 		sourceColumn: STATUS
 
 	/// 批次訊息
 	column MESSAGE
 		dataType: string
-		formatString: nan
 		sourceColumn: MESSAGE
 
 	partition ETL_BATCH_LOG = m
 		mode: import
 		source =
-				let     Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),     SchemaNav = Source{[Schema = OracleSchema]}[Data],     TableNav = SchemaNav{[Name = "ETL_BATCH_LOG"]}[Data],     Typed = Table.TransformColumnTypes(TableNav, {         {"BUSINESS_DATE_KEY", Int64.Type},         {"RUN_AT", type datetime},         {"ROWS_LOADED", Int64.Type},         {"STATUS", type text},         {"MESSAGE", type text}     }) in     Typed
+				let
+				    Source = Oracle.Database(OracleServer, [HierarchicalNavigation = true]),
+				    SchemaNav = Source{[Schema = OracleSchema]}[Data],
+				    TableNav = SchemaNav{[Name = "ETL_BATCH_LOG"]}[Data],
+				    Typed = Table.TransformColumnTypes(TableNav, {
+				        {"BUSINESS_DATE_KEY", Int64.Type},
+				        {"RUN_AT", type datetime},
+				        {"ROWS_LOADED", Int64.Type},
+				        {"STATUS", type text},
+				        {"MESSAGE", type text}
+				    })
+				in
+				    Typed
 

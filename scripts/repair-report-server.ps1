@@ -3,6 +3,7 @@
 # Run once as administrator (one UAC prompt):
 #   powershell -ExecutionPolicy Bypass -File scripts\repair-report-server.ps1
 # The service log lines with errors are copied to data\rs-errors.txt for diagnosis.
+param([switch]$NoWait)  # -NoWait: close without waiting for Enter (when started by another script)
 $ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 $out = Join-Path $root 'data\rs-errors.txt'
@@ -32,4 +33,4 @@ $logs = Get-ChildItem 'C:\Program Files\Microsoft Power BI Report Server\PBIRS\L
 $logs | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName -Tail 3000 | Select-String -Pattern 'error|exception|fail' | Select-Object -Last 40 } |
     Out-File -FilePath $out -Encoding utf8
 Write-Output "done; errors copied to $out"
-Read-Host 'Press Enter to close'
+if (-not $NoWait) { Read-Host 'Press Enter to close' }

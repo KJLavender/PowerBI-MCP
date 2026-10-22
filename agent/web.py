@@ -12,6 +12,7 @@ import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -47,6 +48,8 @@ app = FastAPI(lifespan=lifespan)
 
 
 # the published report next to the chat; datasets that are not on Report Server get the chat page only
+# links put in mail must open on the colleague's machine: set PUBLIC_URL to this server's address on the network
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
 REPORT_URL = os.environ.get("REPORT_URL", "http://localhost:8081/Reports/powerbi/RetailSales"
                             if dataset.NAME == "retail" else "")
 
@@ -165,6 +168,56 @@ async def conversation(conversation_id: str):
         t.pop("evidence", None)
         t["tools"] = [{"name": c["tool"], "args": c["args"], "result": c.get("result", "")} for c in t["tools"]]
     return turns
+
+
+@app.get("/api/conversations/{conversation_id}/meta")
+async def conversation_meta(conversation_id: str):
+    meta = history_store.conversation_meta(conversation_id)
+    if meta:
+        meta["latest"] = latest_date()  # newer data than the shared answers were computed on?
+    return meta
+
+
+@app.post("/api/conversations/{conversation_id}/share")
+async def share(conversation_id: str, request: Request):
+    """A link that opens the same report view with a copy of this conversation, plus a mail draft."""
+    body = await request.json()
+    try:
+        token = history_store.create_share(conversation_id, body.get("context"), body.get("sender"), latest_date())
+    except KeyError:
+        return JSONResponse({"error": "這個對話還沒有任何問答，沒有東西可以轉寄"}, status_code=404)
+    base = (PUBLIC_URL or str(request.base_url)).rstrip("/")
+    url = f"{base}/s/{token}"
+    turns = history_store.load_turns(conversation_id)
+    last = turns[-1]
+    conclusion = next((line for line in last["answer"].splitlines() if line.strip()), "")
+    conclusion = conclusion.replace("**", "").replace("結論：", "").strip()[:300]
+    ctx = body.get("context") or {}
+    windows = {k: v["label"] for k, v in tools.ctx().config["windows"].items()}
+    view = "、".join([f"{k}：{v}" for k, v in (ctx.get("filters") or {}).items() if v]
+                     + ([f"日期 {ctx['date']}（{windows.get(ctx.get('window'), ctx.get('window') or '')}）"]
+                        if ctx.get("date") else []))
+    asked = "\n".join(f"{i}. {t['question']}" for i, t in enumerate(turns[:5], 1)) + \
+        (f"\n…共 {len(turns)} 個問題" if len(turns) > 5 else "")
+    subject = f"[報表問答] {turns[0]['question'][:40]}"
+    text = (f"我在報表問答問了：\n{asked}\n\n最後的結論：{conclusion}\n\n"
+            + (f"當時報表的篩選：{view}\n" if view else "當時報表沒有篩選（全部期間）\n")
+            + f"\n點下面的連結，會打開同一個報表畫面和這段對話，你可以直接接著問：\n{url}\n\n"
+            f"（資料截至 {latest_date()}；連結 {history_store.SHARE_DAYS} 天內有效）")
+    return {"url": url, "subject": subject, "body": text}
+
+
+@app.get("/s/{token}")
+async def open_share(token: str):
+    """Fork the shared conversation and open it on the report view it was asked on."""
+    share = history_store.get_share(token)
+    new_id = history_store.fork(token) if share else None
+    if new_id is None:
+        return JSONResponse({"error": "這個連結已過期或不存在"}, status_code=404)
+    view = {k: v for k, v in (share["context"] or {}).items() if not k.startswith("_")}
+    target = "/" if REPORT_URL else "/chat"
+    hash_ = "#" + quote(json.dumps(view, ensure_ascii=False)) if view else ""
+    return RedirectResponse(f"{target}?session={new_id}{hash_}")
 
 
 @app.delete("/api/conversations/{conversation_id}")

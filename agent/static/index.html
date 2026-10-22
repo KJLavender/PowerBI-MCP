@@ -98,6 +98,15 @@
   .conv .del { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; }
   .conv .del:hover { color: #b91c1c; background: #fee2e2; }
   .empty { padding: 16px; color: var(--muted); font-size: 13px; }
+  .shared-banner { margin: 8px 0 4px; padding: 10px 12px; border-radius: 8px; background: #eef4ff; color: #1e3a8a; font-size: 13px; line-height: 1.6; }
+  .shared-banner.stale { background: #fff7e6; color: #8a5300; }
+  .share-box { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none; align-items: center; justify-content: center; z-index: 20; }
+  .share-box.open { display: flex; }
+  .share-card { background: #fff; border-radius: 10px; padding: 18px; width: min(460px, 92vw); box-shadow: 0 10px 30px rgba(0,0,0,.2); font-size: 14px; }
+  .share-card h3 { margin: 0 0 8px; font-size: 16px; }
+  .share-card input { width: 100%; box-sizing: border-box; padding: 6px 8px; margin: 6px 0 10px; border: 1px solid #ccd; border-radius: 6px; }
+  .share-card .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+  .share-card .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -106,6 +115,7 @@
   <span class="meta" id="meta">連線中…</span>
   <span class="spacer"></span>
   <a id="openReport" href="/" target="_blank" rel="noopener">報表 + 問答</a>
+  <button id="shareBtn" type="button" title="把報表畫面和這段對話寄給同事，對方可以接著問">轉寄</button>
   <button id="historyBtn" type="button">紀錄</button>
   <button id="reset" type="button">新對話</button>
 </header>
@@ -113,6 +123,21 @@
   <div class="drawer-head"><strong>對話紀錄</strong><button type="button" id="closeDrawer">關閉</button></div>
   <div class="drawer-note">紀錄只存在這台電腦（data/chats.sqlite）。</div>
   <div id="convList"></div>
+</div>
+
+<div class="share-box" id="shareBox">
+  <div class="share-card">
+    <h3>轉寄這段對話</h3>
+    <div>對方點連結會看到同一個報表畫面和這段對話，並且可以接著問（對方拿到的是副本，不會改到你的對話）。</div>
+    <label>你的名字（會寫在信裡）<input id="senderName" placeholder="例如：王小明"></label>
+    <input id="shareUrl" readonly placeholder="按「產生連結」">
+    <div class="row">
+      <button type="button" id="shareCancel">關閉</button>
+      <button type="button" id="shareCopy">複製連結</button>
+      <button type="button" id="shareMail">用 Outlook 寄出</button>
+    </div>
+    <div class="note" id="shareNote"></div>
+  </div>
 </div>
 
 <main id="main">
@@ -139,6 +164,7 @@ const TOOL_LABELS = {
   explain_change: "分析變化原因", metric_change: "查詢指標變化", metric_trend: "查詢趨勢",
   daily_report: "讀取每日報告", data_quality: "檢查資料品質", metric_lineage: "查詢指標來源",
   describe_model: "讀取模型結構", list_members: "查詢維度成員",
+  explain_visual: "找出並解釋畫面上的圖", report_emphasis: "讀取報表作者的設定", cross_report: "查詢其他報表",
 };
 if (new URLSearchParams(location.search).has("embed")) {
   document.body.classList.add("embed");
@@ -150,7 +176,10 @@ let examples = [];
 const welcomeHTML = $("thread").innerHTML;
 // the current conversation survives reloads; older ones are listed under 紀錄
 function newSession() { const id = crypto.randomUUID(); localStorage.setItem("chatSession", id); return id; }
-let session = localStorage.getItem("chatSession") || newSession();
+// a forwarded link opens its own copy of the conversation (?session=…)
+const linked = new URLSearchParams(location.search).get("session");
+if (linked) localStorage.setItem("chatSession", linked);
+let session = linked || localStorage.getItem("chatSession") || newSession();
 
 function showWelcome() {
   $("thread").innerHTML = welcomeHTML;
@@ -167,6 +196,15 @@ async function loadConversation(id) {
   session = id; localStorage.setItem("chatSession", id);
   if (!turns.length) { showWelcome(); return; }
   $("thread").innerHTML = "";
+  const meta = await (await fetch(`/api/conversations/${encodeURIComponent(id)}/meta`)).json();
+  if (meta.shared) {
+    const b = document.createElement("div");
+    const stale = meta.latest && meta.data_date && meta.latest > meta.data_date;
+    b.className = "shared-banner" + (stale ? " stale" : "");
+    b.textContent = `這是${meta.sender ? `「${meta.sender}」` : "同事"}在 ${timeText(meta.shared_at)} 轉寄的對話（當時資料截至 ${meta.data_date}），可以直接接著問。`
+      + (stale ? `資料已更新到 ${meta.latest}：下面的數字是當時的，再問一次會用最新資料。` : "");
+    $("thread").appendChild(b);
+  }
   for (const t of turns) {
     addUser(t.question);
     finish(addBot(), { text: t.answer, grounded: t.grounded, retries: t.retries, seconds: t.seconds, check: t.check,
@@ -370,6 +408,39 @@ $("reset").addEventListener("click", () => {
   showWelcome();
 });
 $("historyBtn").addEventListener("click", openDrawer);
+
+// ---------- forward: a link to the same report view + a copy of this conversation, in a mail draft ----------
+let draft = null;
+$("senderName").value = localStorage.getItem("senderName") || "";
+$("shareBtn").addEventListener("click", async () => {
+  $("shareBox").classList.add("open");
+  $("shareNote").textContent = ""; $("shareUrl").value = ""; draft = null;
+  await makeLink();
+});
+async function makeLink() {
+  const name = $("senderName").value.trim();
+  localStorage.setItem("senderName", name);
+  const context = window.parent?.getContext ? window.parent.getContext() : null;
+  const resp = await fetch(`/api/conversations/${encodeURIComponent(session)}/share`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ context, sender: name }) });
+  const data = await resp.json();
+  if (!resp.ok) { $("shareNote").textContent = data.error || "產生連結失敗"; return null; }
+  draft = data; $("shareUrl").value = data.url;
+  $("shareNote").textContent = "連結 30 天內有效。對方要能連到這台伺服器，也要有報表的檢視權限。";
+  return data;
+}
+$("senderName").addEventListener("change", makeLink);
+$("shareCancel").addEventListener("click", () => $("shareBox").classList.remove("open"));
+$("shareCopy").addEventListener("click", async () => {
+  if (!draft) return;
+  await navigator.clipboard.writeText(draft.url);
+  $("shareNote").textContent = "已複製連結。";
+});
+$("shareMail").addEventListener("click", () => {
+  if (!draft) return;
+  const href = `mailto:?subject=${encodeURIComponent(draft.subject)}&body=${encodeURIComponent(draft.body)}`;
+  window.open(href, "_top");
+});
 $("closeDrawer").addEventListener("click", () => $("drawer").classList.remove("open"));
 
 fetch("/api/info").then((r) => r.json()).then(async (info) => {

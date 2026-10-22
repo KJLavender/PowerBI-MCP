@@ -3,10 +3,15 @@
 Each turn stores what the page shows (question, answer, check result, tool calls, focus) plus the tool
 results, so a conversation reopened later — even after a server restart — keeps working for follow-ups
 and its numbers stay checkable.
+
+Sharing: a share link (random token, 30 days) points at a conversation and the report view it was asked on.
+Whoever opens it gets their own copy of the conversation (a fork) to continue; the original stays as it was.
 """
 import json
+import secrets
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 from analysis.dataset import DATA_DIR
@@ -25,7 +30,11 @@ CREATE TABLE IF NOT EXISTS turns (
     retries INTEGER NOT NULL, seconds REAL NOT NULL,
     tools TEXT NOT NULL, evidence TEXT NOT NULL, focus TEXT, context TEXT,
     PRIMARY KEY (conversation_id, idx));
+CREATE TABLE IF NOT EXISTS shares (
+    token TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL,
+    sender TEXT, context TEXT, data_date TEXT);
 """
+SHARE_DAYS = 30
 
 
 def connect() -> sqlite3.Connection:
@@ -36,6 +45,8 @@ def connect() -> sqlite3.Connection:
     con.executescript(SCHEMA)
     if "checks" not in {r[1] for r in con.execute("PRAGMA table_info(turns)")}:
         con.execute("ALTER TABLE turns ADD COLUMN checks TEXT")  # per-check result, added later
+    if "shared_from" not in {r[1] for r in con.execute("PRAGMA table_info(conversations)")}:
+        con.execute("ALTER TABLE conversations ADD COLUMN shared_from TEXT")  # share token of a fork
     return con
 
 
@@ -94,3 +105,60 @@ def delete_conversation(conversation_id: str) -> None:
     with connect() as con:
         con.execute("DELETE FROM turns WHERE conversation_id = ?", (conversation_id,))
         con.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+
+
+# ---------------------------------------------------------------------------------- sharing
+def create_share(conversation_id: str, context: dict | None, sender: str | None, data_date: str | None) -> str:
+    """A link token for the conversation as it is now (later turns of the original are not included)."""
+    token = secrets.token_urlsafe(16)
+    now = time.time()
+    with connect() as con:
+        if not con.execute("SELECT 1 FROM conversations WHERE id = ?", (conversation_id,)).fetchone():
+            raise KeyError(conversation_id)
+        n = con.execute("SELECT COUNT(*) FROM turns WHERE conversation_id = ?", (conversation_id,)).fetchone()[0]
+        con.execute("INSERT INTO shares (token, conversation_id, created_at, expires_at, sender, context, data_date) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (token, conversation_id, now, now + SHARE_DAYS * 86400, sender,
+                     json.dumps({**(context or {}), "_turns": n}, ensure_ascii=False), data_date))
+    return token
+
+
+def get_share(token: str) -> dict | None:
+    with connect() as con:
+        r = con.execute("SELECT * FROM shares WHERE token = ?", (token,)).fetchone()
+    if not r or r["expires_at"] < time.time():
+        return None
+    out = dict(r)
+    out["context"] = json.loads(r["context"]) if r["context"] else {}
+    return out
+
+
+def fork(token: str) -> str | None:
+    """A new conversation with the shared turns, for the person who opened the link to continue."""
+    share = get_share(token)
+    if share is None:
+        return None
+    new_id = str(uuid.uuid4())
+    upto = share["context"].get("_turns", 10 ** 6)
+    now = time.time()
+    with connect() as con:
+        title = con.execute("SELECT title FROM conversations WHERE id = ?", (share["conversation_id"],)).fetchone()
+        con.execute("INSERT INTO conversations (id, title, created_at, updated_at, shared_from) VALUES (?, ?, ?, ?, ?)",
+                    (new_id, f"（轉寄）{title['title'] if title else ''}", now, now, token))
+        con.execute("""INSERT INTO turns (conversation_id, idx, created_at, question, answer, grounded, retries,
+                       seconds, tools, evidence, focus, context, checks)
+                       SELECT ?, idx, created_at, question, answer, grounded, retries, seconds, tools, evidence,
+                              focus, context, checks
+                       FROM turns WHERE conversation_id = ? AND idx < ?""", (new_id, share["conversation_id"], upto))
+    return new_id
+
+
+def conversation_meta(conversation_id: str) -> dict:
+    """Where a conversation came from (a share), for the banner on a forwarded conversation."""
+    with connect() as con:
+        r = con.execute("SELECT shared_from FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
+        share = con.execute("SELECT * FROM shares WHERE token = ?", (r["shared_from"],)).fetchone() \
+            if r and r["shared_from"] else None
+    if not share:
+        return {}
+    return {"shared": True, "sender": share["sender"], "shared_at": share["created_at"], "data_date": share["data_date"]}

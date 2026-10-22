@@ -60,7 +60,11 @@ let info = null, options = null;
 
 // ---------- shared context: the filter bar drives both the report (URL filters) and the chat ----------
 const WINDOW_SPAN = { day: [28, "近 4 週同星期比較"], week: [13, "近 7 日 vs 前 7 日"], month: [55, "近 28 日 vs 前 28 日"], year: [27, "近 28 日"] };
-function addDays(iso, n) { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); }
+// local calendar arithmetic: toISOString() is UTC and moved the date one day back in UTC+8
+function addDays(iso, n) {
+  const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function getContext() {
   const filters = {};
@@ -118,11 +122,14 @@ window.applyFocus = (focus) => {
 };
 
 async function init() {
+  // a forwarded link (/s/…) lands here with ?session=<copy of the conversation>: open it in the chat panel
+  const linked = new URLSearchParams(location.search).get("session");
+  if (linked) $("chat").src = `/chat?embed=1&session=${encodeURIComponent(linked)}`;
   info = await (await fetch("/api/info")).json();
   // keep the report's sign-in cookies first-party: same host name as the report
   const reportHost = new URL(info.report_url).hostname;
   if (location.hostname !== reportHost && ["localhost", "127.0.0.1"].includes(location.hostname)) {
-    location.replace(`${location.protocol}//${reportHost}:${location.port}${location.pathname}`);
+    location.replace(`${location.protocol}//${reportHost}:${location.port}${location.pathname}${location.search}${location.hash}`);
     return;
   }
   options = await (await fetch("/api/context-options")).json();

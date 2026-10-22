@@ -17,8 +17,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent / "powerbi"))
-from build_pbip import (SCHEMA, indent, literal, q, reset_dir, tabs, textbox, visual, write,  # noqa: E402
-                        write_json)
+from build_pbip import (GREEN, RED, SCHEMA, YELLOW, cmp, constant_line, indent, member_color, q,  # noqa: E402
+                        reset_dir, rule_color, tabs, textbox, visual, write, write_json)
 from build_pbip import tag as _tag  # noqa: E402
 
 NAME = "StoreTargets"
@@ -184,34 +184,6 @@ def M(name: str) -> dict:
 
 def C(table: str, name: str) -> dict:
     return field("Column", table, name)
-
-
-def cmp(kind: int, ref: dict, value: str) -> dict:
-    return {"Comparison": {"ComparisonKind": kind, "Left": ref["field"], "Right": {"Literal": {"Value": value}}}}
-
-
-def rule_color(prop: str, ref: dict, cases: list[tuple[dict, str]]) -> list:
-    """Rules-based conditional formatting of one field (values / backColor, fontColor …)."""
-    table = ref["queryRef"]
-    return [{"properties": {prop: {"solid": {"color": {"expr": {"Conditional": {"Cases": [
-        {"Condition": cond, "Value": {"Literal": {"Value": f"'{color}'"}}} for cond, color in cases]}}}}}},
-        "selector": {"data": [{"dataViewWildcard": {"matchingOption": 1}}], "metadata": table}}]
-
-
-def constant_line(name: str, value: str, color: str) -> list:
-    return [{"properties": {"show": literal("true"), "displayName": literal(f"'{name}'"), "value": literal(value),
-                            "lineColor": {"solid": {"color": literal(f"'{color}'")}}, "style": literal("'dashed'"),
-                            "dataLabelShow": literal("true")}, "selector": {"id": "1"}}]
-
-
-def member_color(table: str, column: str, member: str, color: str) -> list:
-    return [{"properties": {"fill": {"solid": {"color": literal(f"'{color}'")}}},
-             "selector": {"data": [{"scopeId": {"Comparison": {"ComparisonKind": 0, "Left": {
-                 "Column": {"Expression": {"SourceRef": {"Entity": table}}, "Property": column}},
-                 "Right": {"Literal": {"Value": f"'{member}'"}}}}}]}}]
-
-
-RED, YELLOW, GREEN = "#E81123", "#F2C80F", "#3BB44A"
 
 
 def pages() -> list[tuple[str, str, list]]:

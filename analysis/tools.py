@@ -852,25 +852,9 @@ def report_emphasis(report: str | None = None) -> dict:
            "作者明確設定": [f"{e.page}／{e.visual}：{e.text}" for e in explicit] or ["沒有條件式格式、目標線或凸顯設定"],
            "版面提示（依位置與大小推斷，不是作者明確設定）": [f"{e.page}：{e.text}" for e in r.emphasis
                                                  if e.kind == "layout"]}
-    # the author's literal thresholds against the latest value, for metrics this dataset can compute
-    checks = []
-    if r.name == dataset.NAME:
-        rules = [t for t in intent.thresholds(r.emphasis) if t["kind"] == "rule" and t["field"] in ctx().metrics]
-        if rules:
-            with engine_at(None) as (e, d):
-                bases = scope_bases(e, {})
-                for t in rules:
-                    s = e.stat(bases, t["field"], "day", e.z_threshold({}), member=False)
-                    if s is None:
-                        continue
-                    hit = {"<": s.current < t["value"], "<=": s.current <= t["value"], ">": s.current > t["value"],
-                           ">=": s.current >= t["value"], "=": s.current == t["value"]}[t["op"]]
-                    tone = f" → {t['tone']}色" if t["tone"] else ""
-                    checks.append(f"{d} 整體{t['field']} {ctx().fmt(t['field'], s.current)}："
-                                  f"{'符合' if hit else '不符合'}作者規則「{t['field']} {t['op']} {t['value']}{tone}」"
-                                  f"（{t['page']}／{t['visual']}）")
-    if checks:
-        out["最新值對照作者門檻"] = checks
+    if explicit:
+        out["哪些成員目前是哪個顏色"] = ("規則逐列（每個門市、品類…）套用，不是看整體；"
+                                "要知道目前哪些成員落在哪個顏色，用 explain_visual 指定那張圖")
     return out
 
 
@@ -996,3 +980,107 @@ def _key_text(k) -> str:
     if ro and k.kind != "orphans":
         parts.append(f"只在 {short(k.right_source)}：" + "、".join(ro[:10]) + ("…" if len(ro) > 10 else ""))
     return "；".join(parts)
+
+
+# ---------------------------------------------------------------------------------- the visual the user means
+@lru_cache(maxsize=1)
+def report_visuals():
+    from . import dataset, visuals
+    cat = catalog_()
+    report = cat.report(dataset.NAME)
+    return cat, report, visuals.load(report)
+
+
+def explain_visual(what: str, page: str | None = None, date_str: str | None = None, window: str | None = None,
+                   filters: dict | None = None) -> dict:
+    """Find the visual the user describes ("紅色的", "北區那根長條", "門市績效") and explain it: what it shows, how
+    its measures are computed, its filters, the author's settings, and its numbers over the date range the report
+    shows (with which members fall in which colour band of the author's rules)."""
+    from . import visuals
+    cat, report, infos = report_visuals()
+    c = ctx()
+    member_cols = {m: f"{c.dims[k].table}[{c.dims[k].column}]"
+                   for m, label in member_index().items() for k in c.dims if c.dims[k].label == label}
+    dim_cols = {d.label: f"{d.table}[{d.column}]" for d in c.dims.values()}
+    found = visuals.locate(infos, f"{what} {page or ''}", page, member_cols, dim_cols)
+    if not found:
+        raise ToolError("報表上找不到符合的圖表。各頁的圖表：" + "；".join(
+            f"{p}：{'、'.join(v.title or v.kind for v in infos if v.page == p)}" for p in dict.fromkeys(v.page for v in infos)))
+    top = found[0][0]
+    close = [f for f in found if f[0] >= top - 1.5]
+    if len(close) > 1:
+        return {"結果": "有好幾張圖符合，請使用者指出是哪一張（不要猜）",
+                "候選": [f"{v.label}（{v.kind}）：{'；'.join(why) or '部分符合'}" for _, v, why in close[:6]]}
+    v = found[0][1]
+    out = {"找到的圖表": f"{v.label}（{v.kind}）", "為什麼是這張": found[0][2], **visuals.describe(cat, report, v)}
+    out.update(_visual_values(cat, report, v, date_str, window, filters))
+    return out
+
+
+def _visual_values(cat, report, v, date_str, window, filters) -> dict:
+    """The visual's numbers over the report's date range (current dataset only), grouped like the visual."""
+    from . import visuals
+    c = ctx()
+    by_col = {f"{d.table}[{d.column}]": k for k, d in c.dims.items()}
+    date_cols = {f"{c.date_dim.table}[{c.date_dim.column}]"} | {
+        f"{c.date_dim.table}[{col}]" for col in c.model.tables[c.date_dim.table].columns}
+    group = [by_col[col] for role in visuals.ROWS for col in v.fields.get(role, []) if col in by_col]
+    on_time_axis = any(col in date_cols for role in visuals.ROWS for col in v.fields.get(role, []))
+    dims = tuple(group[-1:])  # the finest grouping of the visual
+    scope = {}
+    for label, member in (filters or {}).items():
+        key = next((k for k, d in c.dims.items() if label in (k, d.label)), None)
+        if key is None:
+            raise ToolError(f"沒有維度「{label}」，可用：{'、'.join(d.label for d in c.dims.values())}")
+        scope[key] = member
+    with store.open_db(read_only=True) as db:
+        first, last = db.execute("SELECT min(business_date), max(business_date) FROM snapshot_log").fetchone()
+    if date_str:
+        d1 = clamp_to_data(parse_date(date_str))
+        w = window_name(window or "day")
+        d0 = max(first, d1 - timedelta(days=visuals.REPORT_SPAN.get(w, 28)))
+        period = f"{d0} ～ {d1}（面板選 {d1}、{w}，報表上的日期範圍）"
+    else:
+        d0, d1 = first, last
+        period = f"{d0} ～ {d1}（面板沒有選日期：報表顯示全部期間）"
+    out = {"期間": period}
+    notes = []
+    if v.filters:
+        notes.append("這張圖另有篩選（" + "；".join(v.filters) + "），下面的數值沒有套用，可能和畫面不同")
+    if on_time_axis:
+        notes.append("這張圖的橫軸是日期，下面是整段期間的合計，不是每一天的值")
+    with engine_at(d1) as (e, d):
+        e.d0 = min(e.d0, d0 - timedelta(days=400))  # room for DATEADD / last-year shifts
+        e.cache.clear()
+        ev = visuals.RangeEvaluator(cat, report, e)
+        values, bands = {}, []
+        for m in [re.sub(r"^\w+\((.*)\)$", r"\1", x) for x in v.measures][:5]:
+            res = ev.values(m, dims, scope, d0, d1)
+            if isinstance(res, str):
+                values[m] = f"無法從快照計算：{res}"
+                continue
+            label = c.dims[dims[0]].label if dims else "整體"
+            rows = sorted(((k[0] if k else "整體", x) for k, x in res.items() if x is not None), key=lambda r: r[1])
+            shown = rows if len(rows) <= 30 else rows[:10] + rows[-10:]
+            values[m] = {f"{label}：{name}": c.fmt(m, x) for name, x in shown}
+            if len(rows) > 30:
+                values[m]["（說明）"] = f"共 {len(rows)} 個{label}，只列最低與最高各 10 個"
+            for em in v.emphasis:
+                cases = [cs for cs in em.cases if cs["field"] == m]
+                if not cases:
+                    continue
+                groups: dict[str, list[str]] = {}
+                for name, x in rows:
+                    cs = visuals.band(cases, x)
+                    key = f"{cs['tone'] or cs['result']}（{cs['label']}）" if cs else "不符合任何規則（預設樣式）"
+                    groups.setdefault(key, []).append(f"{name} {c.fmt(m, x)}")
+                bands.append({"規則": em.text, "目前的分類": {k: "、".join(x[:15]) + (f"…等 {len(x)} 個" if len(x) > 15 else "")
+                                                       for k, x in groups.items()}})
+    out["數值（依報表的日期範圍由快照計算）"] = values
+    if bands:
+        out["依作者規則的顏色"] = bands
+    if scope:
+        out["套用的面板篩選"] = {c.dims[k].label: m for k, m in scope.items()}
+    if notes:
+        out["注意"] = notes
+    return out

@@ -83,3 +83,31 @@
   question: StoreTargets 這份報表的作者想凸顯什麼？達成率的紅燈門檻是多少？
   tools: [report_emphasis]
   expect: ["90%", "東區"]
+
+# 畫面上的圖（explain_visual）：使用者描述看到的東西，工具從報表檔案找出是哪張圖、讀出作者規則、依報表日期範圍算數值
+- id: visual-red-rule
+  question: 門市績效表上紅色的字是什麼意思？
+  tools: [explain_visual]
+  expect: ["-10%", "週變動"]
+
+- id: visual-ambiguous
+  question: 報表上紅色的是什麼意思？
+  tools: [explain_visual, report_emphasis]
+  expect: ["門市績效", "毛利率"]
+  forbid: ["應無紅色|沒有紅色|不會.{0,4}紅"]
+
+- id: visual-which-orange
+  question: 我現在看 2026-10-17 的報表，門市績效裡哪些門市的週變動是橘色的？
+  tools: [explain_visual]
+  expect: ["新北新莊店"]
+  forbid: ["台北信義店.{0,6}橘"]
+
+- id: visual-line
+  question: 各品類每月毛利率那張圖上的紅色虛線代表什麼？
+  tools: [explain_visual]
+  expect: ["45%", "底線|門檻|標準"]
+
+- id: visual-north
+  question: 總覽那張各區域銷售額，北區為什麼是不同顏色？
+  tools: [explain_visual]
+  expect: ["凸顯|特別|作者|刻意"]

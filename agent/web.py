@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from analysis import dataset, tools
+from analysis.visuals import REPORT_SPAN
 
 from . import history as history_store
 from .host import DEFAULT_MODEL, HINTS, Agent, Turn
@@ -91,7 +92,8 @@ async def context_options():
         first, last = db.execute("SELECT min(business_date), max(business_date) FROM snapshot_log").fetchone()
     date_dim = c.date_dim
     return {"dims": dims, "date_field": f"{date_dim.table}/{date_dim.column}", "min": str(first), "max": str(last),
-            "windows": {k: v["label"] for k, v in c.config["windows"].items()}}
+            "windows": {k: v["label"] for k, v in c.config["windows"].items()},
+            "spans": REPORT_SPAN}
 
 
 def focus_of(turn: Turn) -> dict | None:

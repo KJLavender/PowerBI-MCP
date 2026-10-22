@@ -126,6 +126,8 @@ async function init() {
     return;
   }
   options = await (await fetch("/api/context-options")).json();
+  // the report's date range per window comes from the server, so the chat computes over the same days
+  for (const [w, days] of Object.entries(options.spans || {})) if (WINDOW_SPAN[w]) WINDOW_SPAN[w][0] = days;
   $("open").href = info.report_url;
   $("info").textContent = `資料最新到 ${info.latest}`;
   $("date").min = options.min; $("date").max = options.max;

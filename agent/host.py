@@ -57,7 +57,9 @@ SYSTEM = """\
 4. 若結果的「脈絡」提到資料品質問題，要優先指出「可能是資料缺漏，而非實際營運變化」。
 5. 若變化不顯著，要說明變化在正常波動範圍內；若判讀是「樣本太少」，要說資料量不足以判斷，不可以下結論。
 6. 問到其他報表、Excel、兩份報表的數字為什麼對不起來、某個量值在別的報表叫什麼，呼叫 cross_report；
-   問報表想強調什麼、紅燈 / 目標門檻是多少，呼叫 report_emphasis。
+   問畫面上的顏色、某張圖、某條線（「紅色是什麼意思」「這張圖怎麼看」「哪些門市是紅的」），呼叫 explain_visual，
+   what 照抄使用者的描述；若回傳多個候選，列出候選並請使用者指出是哪一張，不要自己挑。
+   問整份報表想強調什麼，呼叫 report_emphasis。
 7. 用繁體中文，格式：
    **結論**：一到兩句。
    **證據**：條列，每點引用工具回傳的文字。
@@ -166,6 +168,11 @@ class Agent:
                 self.log(f"  → {name}({json.dumps(args, ensure_ascii=False)})")
                 await emit({"type": "tool", "name": name, "args": args})
                 note = fix_date(turn.question, name, args)
+                if name == "explain_visual" and turn.question not in str(args.get("what", "")):
+                    # the model tends to shorten "門市績效表上紅色的字" to "紅色的字": the visual is found from
+                    # the user's own words too, and "第一張" after a list of candidates names that candidate
+                    picked = picked_choice(turn.question, self.choices)
+                    args["what"] = " ".join(x for x in (args.get("what", ""), turn.question, picked) if x)
                 visible, facts, key = grounding.split_result(await self.call(name, args))
                 if note:
                     visible = visible[:-1] + f', "參數校正": "{note}"}}' if visible.endswith("}") else visible
@@ -242,6 +249,7 @@ class Agent:
                          {"role": "assistant", "content": past.answer.split("\n\n> ⚠️")[0]}]
             evidence_text += past.evidence + [past.question]
         self.context_members = {m.name for m in self.checker.vocab.find(context or "") if m.kind == "member"}
+        self.choices = visual_choices(history)
         if context:
             messages.append({"role": "system", "content":
                              f"使用者目前在報表上的篩選：{context}。問題若沒有指定日期、範圍或時間窗，就沿用這些篩選"
@@ -274,6 +282,39 @@ class Agent:
             turn.answer = strip_think(answer)
         turn.seconds = time.time() - t0
         return turn
+
+
+ORDINAL = re.compile(r"第\s*([一二三四五六1-6])\s*(?:張|個|項|種)?|(前者|後者|最後一張|最後一個)")
+
+
+def visual_choices(history: list[Turn]) -> list[str]:
+    """The candidate visuals explain_visual listed in the previous turn ("頁／標題"), if it asked to pick one."""
+    for c in reversed(history[-1].tool_calls if history else []):
+        if c["tool"] != "explain_visual":
+            continue
+        try:
+            listed = json.loads(c.get("result") or "{}").get("候選") or []
+        except json.JSONDecodeError:
+            return []
+        return [x.split("（")[0] for x in listed]
+    return []
+
+
+def picked_choice(question: str, choices: list[str]) -> str:
+    """「第一張」「後者」「門市績效那張」 → the candidate it names."""
+    if not choices:
+        return ""
+    named = [c for c in choices if c.split("／")[-1] and c.split("／")[-1] in question]
+    if len(named) == 1:
+        return named[0]
+    m = ORDINAL.search(question)
+    if not m:
+        return ""
+    if m.group(2):
+        i = 0 if m.group(2) == "前者" else len(choices) - 1
+    else:
+        i = "一二三四五六".find(m.group(1)) if m.group(1) in "一二三四五六" else int(m.group(1)) - 1
+    return choices[i] if 0 <= i < len(choices) else ""
 
 
 def tool_answer(turn: Turn, asked: set[str]) -> str | None:

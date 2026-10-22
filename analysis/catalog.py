@@ -120,7 +120,7 @@ def column_source(t: Table, column: str) -> str | None:
     """Physical column behind a model column (through model renames and Power Query renames)."""
     sid = source_id(t)
     col = t.columns.get(column)
-    if not sid or col is None:
+    if not sid or col is None or col.calculated:  # a calculated column comes from DAX, not from the source
         return None
     src = col.source_column or column
     for old, new in t.source.get("renames", []):
@@ -215,17 +215,29 @@ class Expander:
         if m is None:
             raise Unsupported(f"找不到量值 {name}")
         self.stack.append(name)
-        saved = self.tokens, self.i
+        saved = self.tokens, self.i, getattr(self, "home", None)
         try:
-            self.tokens, self.i = tokenize(m.expression), 0
+            self.tokens, self.i, self.home = tokenize(m.expression), 0, m.table
             tree = self._expr()
             if self.i != len(self.tokens):
                 raise Unsupported(f"無法解讀 {self.tokens[self.i][1]!r} 之後的內容")
         finally:
-            self.tokens, self.i = saved
+            self.tokens, self.i, self.home = saved
             self.stack.pop()
         self.trees[name] = tree
         return tree
+
+    def expression(self, dax: str, home: str | None = None) -> tuple:
+        """Any DAX expression (not a stored measure), e.g. the aggregate behind an analysis base."""
+        saved = self.tokens, self.i
+        try:
+            self.tokens, self.i = tokenize(dax), 0
+            tree = self._expr()
+            if self.i != len(self.tokens):
+                raise Unsupported(f"無法解讀 {self.tokens[self.i][1]!r} 之後的內容")
+            return tree
+        finally:
+            self.tokens, self.i = saved
 
     # ---- tokens
     def _peek(self):
@@ -296,7 +308,12 @@ class Expander:
         self.i += 1
         self._take("op", "(")
         if fn in AGGREGATES:
-            ref = self._take("colref")[1]
+            kind, ref = self._take()
+            home = getattr(self, "home", None)
+            if kind == "mref" and home and ref[1:-1] in self.model.tables[home].columns:
+                ref = f"'{home}'{ref}"  # [Column] of the measure's own table
+            elif kind != "colref":
+                raise Unsupported(f"預期欄位，遇到 {ref!r}")
             self._take("op", ")")
             return ("atom", f"{fn}({self._colref(ref)})")
         if fn == "COUNTROWS":
@@ -317,6 +334,22 @@ class Expander:
                     depth -= 1
                 parts.append(self._colref(v) if k == "colref" else v)
             return ("atom", f"{fn}({table}, {' '.join(parts)})")
+        if fn == "IF":  # IF(x <> 0, y / x, BLANK()) is DIVIDE(y, x)
+            cond = self._expr()
+            op = self._take("cmp")[1]
+            zero = float(self._take("num")[1])
+            self._take("op", ",")
+            then = self._expr()
+            if self._peek() == ("op", ","):
+                self.i += 1
+                if self._take("func")[1].upper() != "BLANK":
+                    raise Unsupported("IF 只接受「分母不為 0 才相除」的寫法")
+                self._take("op", "(")
+                self._take("op", ")")
+            self._take("op", ")")
+            if op != "<>" or zero != 0 or then[0] != "/" or then[2] != cond:
+                raise Unsupported("IF 只接受「分母不為 0 才相除」的寫法：IF(x <> 0, y / x, BLANK())")
+            return then
         if fn == "DIVIDE":
             num = self._expr()
             self._take("op", ",")

@@ -86,8 +86,9 @@ def metric_lineage(metric: str) -> str:
 
 @server.tool(annotations=READ_ONLY)
 def report_emphasis(report: str | None = None) -> str:
-    """報表作者刻意凸顯的設定：條件式格式的門檻與顏色、目標線、特別上色的成員、前 N 名、卡片比較值；
-    並用最新數字對照作者的門檻。問「報表想強調什麼」「紅燈門檻是多少」時使用。report 省略 = 目前的報表。"""
+    """整份報表的作者設定總覽：條件式格式的門檻與顏色、目標線、特別上色的成員、前 N 名、卡片比較值。
+    問「這份報表想強調什麼」時使用；問畫面上的某個顏色、某張圖、某條線，改用 explain_visual。
+    report 省略 = 目前的報表。"""
     return _run(tools.report_emphasis, report)
 
 
@@ -97,6 +98,16 @@ def cross_report(name: str = "", other: str | None = None) -> str:
     共用的來源與代碼對不上的地方、作者的設定；給 other 時回傳兩者的關聯路徑。name 可寫 報表:名稱 或 表[欄位]；
     name 省略 = 所有報表的關係總覽。問「別的報表」「為什麼兩份報表數字不一樣」「跟 Excel 對得起來嗎」時使用。"""
     return _run(tools.cross_report, name, other)
+
+
+@server.tool(annotations=READ_ONLY)
+def explain_visual(what: str, page: str | None = None, date: str | None = None, window: str | None = None,
+                   filters: dict[str, str] | None = None) -> str:
+    """解釋使用者在報表上看到的某張圖：what 寫使用者怎麼描述它（例如「紅色的」「北區那根長條」「門市績效」
+    「毛利率那條虛線」）。回傳：是哪張圖、顯示什麼、量值怎麼算、篩選、作者設定（顏色規則、目標線、特別上色），
+    以及依報表日期範圍算出的數值與各成員落在作者規則的哪個顏色。有多張圖符合時會列出候選，請使用者指定。
+    date / window / filters 用面板目前的篩選。問「紅色是什麼意思」「這張圖怎麼看」「哪些是紅的」時使用。"""
+    return _run(tools.explain_visual, what, page, date, window, filters)
 
 
 def main(**kwargs: Any) -> None:

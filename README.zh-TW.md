@@ -18,8 +18,9 @@
 | 4. Report Server | Power BI Report Server 每天 06:30 從 Oracle 排程更新，即典型的地端架構 |
 | 5. Excel 報表 | 同一套引擎與問答，用在以公開 Global Superstore 活頁簿做成的 Power BI 報表（一天約 18 筆訂單）：照模型的 Power Query 讀 Excel，門檻用未修改的原始活頁簿校準（每天背景變化 0.2 則），**可偵測的 5 個埋入事件抓到 4 個** |
 | 6. 查核 | 每個回答都經過 9 項機械式查核（日期、範圍、數字、名稱、對應、方向、顯著性、無據原因、重點）。不通過就退回重寫，仍不通過時改顯示分析工具自己的判讀。**沒有任何錯誤回答通過查核**；突變測試刻意竄改正確回答，查核攔下 **94–99%**；分析引擎的數字與 Power BI 自己用 DAX 算出的結果對帳（**10,316 個數字，0 個不一致**） |
-| 7. 任何 .pbix | `python -m analysis import-pbix 檔案.pbix --name X`：模型從 Power BI Desktop 開啟檔案時的背景引擎讀（DMV）、頁面從 .pbix 本身讀、資料用 DAX 取（所以任何資料來源都可以），並依資料推出分析設定草稿。用零售 .pbix、完全不手動調整：快照與直接讀 Oracle 完全相同（**544,515 個值，0 個不一致**），埋入事件全數找到，問答 **10/11** 正確，沒有錯誤回答通過查核 |
+| 7. 任何 .pbix | `python -m analysis import-pbix 檔案.pbix --name X`：**直接讀檔案，不需要 Power BI 也不需要 Windows**：頁面與作者設定從 .pbix 的 JSON 讀，資料模型（DAX、Power Query、關聯）與匯入的資料用 [PBIXRay](https://github.com/Hugoberry/pbixray) 解開，並依資料推出分析設定草稿；檔案讀不了時改用 Power BI Desktop 的背景引擎（`--desktop`）。兩條路對同一份零售 .pbix 的結果相同：模型、草稿、快照 **52,885,918 個值，0 個不一致**；Desktop 路徑的快照與直接讀 Oracle 也相同（**544,515 個值，0 個不一致**），埋入事件全數找到，問答 **10/11** 正確，沒有錯誤回答通過查核 |
 | 8. 多份報表與作者意圖 | `python -m analysis catalog` 把所有報表放進同一張圖：每張表追到實體來源（不論在報表裡叫什麼）、每個量值展開到來源欄位後比對公式是否等價（不看名稱）、Excel 與資料庫的代碼讀實際資料逐值比對。`python -m analysis intent` 讀出作者設定的門檻、目標線、特別上色的成員。財務部的第二份零售報表（另接 Excel 門市目標）裡刻意放的同義、同名不同義、代碼不一致**全部找到**；格式解析用 Microsoft 10 個官方範例 .pbix 驗證，數量全部一致；跨報表問答 **4/4** |
+| 9. 問畫面上的圖 | 使用者描述看到的東西（「紅色的字」「北區那根長條」「毛利率那條虛線」）：從報表檔案指認是哪張圖（有好幾張符合就請使用者選，不猜）、說明量值怎麼算與作者的規則，並依報表正在顯示的日期範圍從快照算出數值與每個成員落在哪個顏色（含 DATEADD 等時間比較）。不截圖。與 Oracle 直接計算比對 **75 個值，0 個不一致**；新增 5 題全數通過，零售題庫 **18/20** 正確、**查核通過卻答錯 0** |
 
 範例（`python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`）：
 
@@ -123,6 +124,7 @@ $env:PBI_DATASET = "superstore"
 - [docs/report-server.md](docs/report-server.md)：Report Server 安裝，以及 PBIR 格式的陷阱
 - [docs/pbix-import.md](docs/pbix-import.md)：直接從 .pbix 匯入報表
 - [docs/excel-dataset.md](docs/excel-dataset.md)：Excel 報表：小量資料的校準、偵測結果、對帳
+- [docs/visuals.md](docs/visuals.md)：問畫面上的圖：指認、解釋、依報表日期範圍計算與顏色分類
 - [docs/catalog.md](docs/catalog.md)：多份報表的關係（血緣、同義與同名不同義的量值、代碼比對）與報表作者的意圖
 
 ## 限制

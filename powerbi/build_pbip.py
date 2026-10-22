@@ -321,6 +321,52 @@ M = lambda n: measure("FACT_SALES", n)  # noqa: E731
 literal = lambda v: {"expr": {"Literal": {"Value": v}}}  # noqa: E731
 
 
+# ---- the author's formatting: conditional rules, constant lines, one member in its own colour
+RED, ORANGE, YELLOW, GREEN = "#E81123", "#E66C37", "#F2C80F", "#3BB44A"
+
+
+def cmp(kind: int, ref: dict, value: str) -> dict:
+    """ComparisonKind 0 =, 1 >, 2 >=, 3 <, 4 <= of a field against a literal ('0.9D')."""
+    return {"Comparison": {"ComparisonKind": kind, "Left": ref["field"], "Right": {"Literal": {"Value": value}}}}
+
+
+def rule_color(prop: str, ref: dict, cases: list[tuple[dict, str]]) -> list:
+    """Rules-based conditional formatting of one field (in `values`: backColor, fontColor …)."""
+    return [{"properties": {prop: {"solid": {"color": {"expr": {"Conditional": {"Cases": [
+        {"Condition": cond, "Value": {"Literal": {"Value": f"'{color}'"}}} for cond, color in cases]}}}}}},
+        "selector": {"data": [{"dataViewWildcard": {"matchingOption": 1}}], "metadata": ref["queryRef"]}}]
+
+
+def constant_line(name: str, value: str, color: str) -> list:
+    return [{"properties": {"show": literal("true"), "displayName": literal(f"'{name}'"), "value": literal(value),
+                            "lineColor": {"solid": {"color": literal(f"'{color}'")}}, "style": literal("'dashed'"),
+                            "dataLabelShow": literal("true")}, "selector": {"id": "1"}}]
+
+
+def member_color(table: str, column: str, member: str, color: str) -> list:
+    return [{"properties": {"fill": {"solid": {"color": literal(f"'{color}'")}}},
+             "selector": {"data": [{"scopeId": {"Comparison": {"ComparisonKind": 0, "Left": {
+                 "Column": {"Expression": {"SourceRef": {"Entity": table}}, "Property": column}},
+                 "Right": {"Literal": {"Value": f"'{member}'"}}}}}]}}]
+
+
+def store_matrix_format() -> dict:
+    """門市績效: weekly change red below -10 %, orange below 0, green from 0; margin below 45 % on a red background."""
+    wow, margin = M("銷售額 週變動%"), M("毛利率")
+    return {"values": rule_color("fontColor", wow, [
+        (cmp(3, wow, "-0.1D"), RED),
+        ({"And": {"Left": cmp(2, wow, "-0.1D"), "Right": cmp(3, wow, "0D")}}, ORANGE),
+        (cmp(2, wow, "0D"), GREEN)]) + rule_color("backColor", margin, [(cmp(3, margin, "0.45D"), "#F8D7DA")])}
+
+
+def margin_floor() -> dict:
+    return {"y1AxisReferenceLine": constant_line("毛利率底線 45%", "0.45D", RED)}
+
+
+def north_highlight() -> dict:
+    return {"dataPoint": member_color("DIM_STORE", "REGION_NAME", "北區", ORANGE)}
+
+
 def visual(name, vtype, x, y, w, h, z, roles=None, title=None, sort_by=None, objects=None):
     v = {"visualType": vtype}
     if roles:
@@ -371,7 +417,7 @@ def pages() -> list[tuple[str, str, list]]:
                     "Y": [M("銷售額"), M("銷售額 上週同日")]}, title="每日銷售額 vs 上週同日"),
             visual("salesByRegion", "barChart", 860, 215, 400, 240, 400,
                    {"Category": [column("DIM_STORE", "REGION_NAME")], "Y": [M("銷售額")]},
-                   title="各區域銷售額"),
+                   title="各區域銷售額", objects=north_highlight()),
             visual("salesByChannel", "columnChart", 20, 470, 600, 240, 500,
                    {"Category": [ym], "Series": [column("DIM_CHANNEL", "CHANNEL_NAME")],
                     "Y": [M("銷售額")]}, title="每月銷售額（依通路）", sort_by=(ym, "Ascending")),
@@ -385,7 +431,7 @@ def pages() -> list[tuple[str, str, list]]:
             visual("storeMatrix", "pivotTable", 20, 80, 760, 630, 200,
                    {"Rows": [column("DIM_STORE", "REGION_NAME"), column("DIM_STORE", "STORE_NAME")],
                     "Values": [M("銷售額"), M("銷售額 週變動%"), M("訂單數"), M("客單價"), M("毛利率")]},
-                   title="門市績效"),
+                   title="門市績效", objects=store_matrix_format()),
             visual("regionTrend", "lineChart", 800, 80, 460, 300, 300,
                    {"Category": [column("DIM_DATE", "FULL_DATE")],
                     "Series": [column("DIM_STORE", "REGION_NAME")], "Y": [M("銷售額")]},
@@ -399,7 +445,7 @@ def pages() -> list[tuple[str, str, list]]:
             date_slicer(),
             visual("categoryMargin", "lineChart", 20, 80, 620, 300, 200,
                    {"Category": [ym], "Series": [column("DIM_PRODUCT", "CATEGORY")], "Y": [M("毛利率")]},
-                   title="各品類每月毛利率", sort_by=(ym, "Ascending")),
+                   title="各品類每月毛利率", sort_by=(ym, "Ascending"), objects=margin_floor()),
             visual("categoryQty", "lineChart", 660, 80, 600, 300, 300,
                    {"Category": [ym], "Series": [column("DIM_PRODUCT", "CATEGORY")],
                     "Y": [M("銷售數量")]}, title="各品類每月銷售數量", sort_by=(ym, "Ascending")),

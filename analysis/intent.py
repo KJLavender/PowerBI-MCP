@@ -40,6 +40,8 @@ class Emphasis:
     text: str     # readable description (Traditional Chinese)
     explicit: bool = True       # an explicit setting (True) or a hint read from the layout (False)
     thresholds: list = field(default_factory=list)  # rules: [{"op", "value", "color", "tone"}] with literal values
+    # rules whose conditions are all literal comparisons: [{"field", "conds": [(op, value)], "result", "tone"}]
+    cases: list = field(default_factory=list)
     where: str = ""             # page / visual id inside the report, for tracing back
 
 
@@ -317,9 +319,10 @@ def _target_text(meta: str) -> str:
 
 
 def _rule(v: _Visual, label: str, cond: dict, target: str, prop_text: str) -> Emphasis:
-    parts, thresholds, fields = [], [], []
+    parts, thresholds, fields, cases = [], [], [], []
     for case in cond.get("Cases", []):
         text, cmps = _condition(case.get("Condition", {}), v.alias)
+        literal_only = cmps and "或" not in text and "非（" not in text and "範圍" not in text             and len({f_ for f_, _, _ in cmps}) == 1 and all(isinstance(x, (int, float)) for _, _, x in cmps)
         val = case.get("Value", {})
         result = _literal(val)
         result = _color_text(result) if isinstance(result, str) and result.startswith("#") else \
@@ -329,12 +332,15 @@ def _rule(v: _Visual, label: str, cond: dict, target: str, prop_text: str) -> Em
         for f_, op, value in cmps:
             fields.append(f_)
             thresholds.append({"field": f_, "op": op, "value": value, "result": color, "tone": tone(color)})
+        if literal_only:
+            cases.append({"field": cmps[0][0], "conds": [(op, x) for _, op, x in cmps], "result": color,
+                          "label": text, "tone": tone(color)})
     if "DefaultValue" in cond:
         d = _literal(cond["DefaultValue"])
         parts.append(f"其他 → {_color_text(d) if isinstance(d, str) else d}")
     field_ = _metadata_text(target) or (fields[0] if fields else "")
     return Emphasis("rule", v.page, label, field_, f"{_target_text(target)}{prop_text}規則：" + "；".join(parts),
-                    thresholds=thresholds, where=v.name)
+                    thresholds=thresholds, cases=cases, where=v.name)
 
 
 def _gradient(v: _Visual, label: str, rule: dict, target: str, prop_text: str) -> Emphasis:
@@ -384,9 +390,13 @@ def _lines(v: _Visual, label: str) -> list[Emphasis]:
                 text, kind = f"{axis}分析線「{name}」= {_field_text(expr, v.alias)}", "analytics"
             else:
                 text, kind = f"{axis}常數線「{name}」（未設定值）", "reference_line"
+            color = _color(p.get("lineColor", {}))
+            line_tone = tone(color)
+            if line_tone:
+                text += f"（{line_tone}色{'虛線' if _literal(p.get('style', {}).get('expr', {})) in ('dashed', 'dotted') else '線'}）"
             out.append(Emphasis(kind, v.page, label, series, text,
-                                thresholds=[{"field": series, "op": "line", "value": value}] if value is not None
-                                else [], where=v.name))
+                                thresholds=[{"field": series, "op": "line", "value": value, "result": color,
+                                             "tone": line_tone}] if value is not None else [], where=v.name))
     return out
 
 

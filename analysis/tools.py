@@ -1025,6 +1025,8 @@ def _visual_values(cat, report, v, date_str, window, filters) -> dict:
     date_cols = {f"{c.date_dim.table}[{c.date_dim.column}]"} | {
         f"{c.date_dim.table}[{col}]" for col in c.model.tables[c.date_dim.table].columns}
     group = [by_col[col] for role in visuals.ROWS for col in v.fields.get(role, []) if col in by_col]
+    unmapped = [col for role in visuals.ROWS for col in v.fields.get(role, [])
+                if "[" in col and col not in by_col and col not in date_cols]
     on_time_axis = any(col in date_cols for role in visuals.ROWS for col in v.fields.get(role, []))
     dims = tuple(group[-1:])  # the finest grouping of the visual
     scope = {}
@@ -1049,6 +1051,9 @@ def _visual_values(cat, report, v, date_str, window, filters) -> dict:
         notes.append("這張圖另有篩選（" + "；".join(v.filters) + "），下面的數值沒有套用，可能和畫面不同")
     if on_time_axis:
         notes.append("這張圖的橫軸是日期，下面是整段期間的合計，不是每一天的值")
+    if unmapped and not dims:
+        notes.append(f"這張圖依 {'、'.join(unmapped)} 分組，但分析設定沒有這個維度，下面只有整體的值，"
+                     "沒有每個分組的值（可以在分析設定加上這個維度）")
     with engine_at(d1) as (e, d):
         e.d0 = min(e.d0, d0 - timedelta(days=400))  # room for DATEADD / last-year shifts
         e.cache.clear()

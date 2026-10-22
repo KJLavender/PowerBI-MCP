@@ -1,12 +1,44 @@
-# PowerBI MCP — 報表理解實驗室
+# PRISM — Proven Report Insights & Semantic Mapping
 
 [English](README.md) | **繁體中文**
 
-一個完全在本機／地端執行的實驗環境，打造能**讀懂 Power BI 報表**的 Agent。每天早上，它會說明哪些指標有變化、變化來自哪裡。使用者問「為什麼這個指標下降？」時，它會依據語意模型中真實的量值與關聯回答，而且每個回答在顯示前都會和分析結果逐項比對。
+**上傳 Power BI 報表（.pbix）和相關的 Excel，就能直接問**——「為什麼銷售掉了？」「紅色是什麼意思？」「財務部的營收跟我們的一樣嗎？」
+PRISM 直接讀報表檔（不需要 Power BI），依報表自己的量值與關聯計算數字，每個回答在顯示前都和計算結果逐項比對。
+全部在你的電腦上執行：檔案、分析與語言模型都不會離開這台電腦。
 
-用兩份報表驗證：建在 Oracle 上的模擬零售報表，以及用公開 Excel 活頁簿（Global Superstore）做成、埋入已知業務事件作為標準答案的 Power BI 報表。
+- **有證據的回答**：數字由模型的 DAX 量值翻成 SQL 算出，不是語言模型算的；9 項機械式查核不通過的回答不會給使用者看。
+- **看懂畫面上的圖**：作者的顏色規則、目標線、凸顯的成員都從報表檔讀出，不用截圖就能說明「紅色那幾根」。
+- **報表與 Excel 一張地圖**：同名但算法不同的量值、改了名但意思相同的量值、Excel 與報表對不上的代碼，一頁看清楚。
+- **轉寄對話**：下一位使用者打開的是同一個報表畫面，並能接著同一段對話繼續問。
 
-全程不出內網：資料來源、分析、MCP Server 與 LLM 都在本機執行。
+## 開始使用
+
+問答需要 [Ollama](https://ollama.com/download)（PRISM 第一次啟動時會自動下載模型 `qwen3.5:4b`）；上傳與報表地圖不需要。
+
+**Windows**：安裝 [Python 3.11 以上](https://www.python.org/downloads/)，下載這個 repo，雙擊 **`PRISM.cmd`**。
+第一次會建立 Python 環境（幾分鐘），之後瀏覽器會打開 <http://localhost:8080>。`PRISM.cmd -Share` 讓同網路的同事也能開。
+
+**Docker**（Linux，或有 Docker 的 Windows）：PRISM 與模型一個指令啟動：
+
+```bash
+docker compose up -d        # 然後打開 http://localhost:8080
+```
+
+把 `.pbix` 拖到頁面上，有相關的 Excel 就一起加入，按 **上傳並分析**：大約一分鐘後就能開始問，報表也會出現在報表地圖上。
+細節、API 與每個步驟在做什麼：[docs/prism.md](docs/prism.md)。
+
+| 頁面 | |
+|---|---|
+| 我的報表 | 上傳、處理進度、開啟報表的問答、加入更多 Excel、刪除 |
+| 報表地圖 | 所有報表與 Excel、共用的來源、同義量值、同名不同義、代碼比對、作者的設定 |
+| 運作原理 | 為什麼回答可以信、驗證過的數字、限制 |
+
+## 怎麼做出來的
+
+PRISM 來自一個完全在本機／地端執行的實驗環境，目標是能**讀懂 Power BI 報表**的 Agent：每天早上說明哪些指標有變化、變化來自哪裡；
+使用者問「為什麼這個指標下降？」時，依語意模型中真實的量值與關聯回答。實驗環境用兩份報表驗證：建在 Oracle 上的模擬零售報表
+（含 Report Server 與每日排程更新，典型的地端架構），以及用公開 Excel 活頁簿（Global Superstore）做成的報表，兩者都埋入已知業務事件作為標準答案。
+以下說明這個實驗環境。
 
 ## 功能
 
@@ -21,6 +53,7 @@
 | 7. 任何 .pbix | `python -m analysis import-pbix 檔案.pbix --name X`：**直接讀檔案，不需要 Power BI 也不需要 Windows**：頁面與作者設定從 .pbix 的 JSON 讀，資料模型（DAX、Power Query、關聯）與匯入的資料用 [PBIXRay](https://github.com/Hugoberry/pbixray) 解開，並依資料推出分析設定草稿；檔案讀不了時改用 Power BI Desktop 的背景引擎（`--desktop`）。兩條路對同一份零售 .pbix 的結果相同：模型、草稿、快照 **52,885,918 個值，0 個不一致**；Desktop 路徑的快照與直接讀 Oracle 也相同（**544,515 個值，0 個不一致**），埋入事件全數找到，問答 **10/11** 正確，沒有錯誤回答通過查核 |
 | 8. 多份報表與作者意圖 | `python -m analysis catalog` 把所有報表放進同一張圖：每張表追到實體來源（不論在報表裡叫什麼）、每個量值展開到來源欄位後比對公式是否等價（不看名稱）、Excel 與資料庫的代碼讀實際資料逐值比對。`python -m analysis intent` 讀出作者設定的門檻、目標線、特別上色的成員。財務部的第二份零售報表（另接 Excel 門市目標）裡刻意放的同義、同名不同義、代碼不一致**全部找到**；格式解析用 Microsoft 10 個官方範例 .pbix 驗證，數量全部一致；跨報表問答 **4/4** |
 | 9. 問畫面上的圖 | 使用者描述看到的東西（「紅色的字」「北區那根長條」「毛利率那條虛線」）：從報表檔案指認是哪張圖（有好幾張符合就請使用者選，不猜）、說明量值怎麼算與作者的規則，並依報表正在顯示的日期範圍從快照算出數值與每個成員落在哪個顏色（含 DATEADD 等時間比較）。不截圖。與 Oracle 直接計算比對 **75 個值，0 個不一致**；新增 5 題全數通過，零售題庫 **18/20** 正確、**查核通過卻答錯 0** |
+| 10. PRISM | 產品化包裝：網頁入口上傳 .pbix 與 Excel（每次上傳自動跑 匯入 → 分析設定 → 快照 → 第一份報告 → 地圖）、每份報表一個問答、報表地圖；Windows 啟動檔與 Docker。從乾淨的下載分別用 `PRISM.cmd` 與 Docker 啟動，匯入 AdventureWorks 範例與它的活頁簿 **77 秒**完成，活頁簿 **46** 欄全部與報表對上，問答回答通過查核 |
 
 範例（`python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`）：
 
@@ -42,14 +75,14 @@
 scenarios/scenarios.yaml — 埋入的業務事件（標準答案），只有評分程式會讀取
 ```
 
-## 環境需求
+## 環境需求（實驗環境）
 
 - Windows 11，含 WSL2（Ubuntu），且 WSL 內有 Docker Engine
 - Python 3.11 以上、Power BI Desktop
 - Phase 3：[Ollama](https://ollama.com) 與支援工具呼叫的模型（預設 `qwen3.5:4b`）
 - Phase 4：Power BI Report Server（Developer 版）、Report Server 專用版 Power BI Desktop、Oracle ODAC
 
-## 快速開始
+## 快速開始（實驗環境）
 
 ```powershell
 # Phase 1 — Oracle + 模擬資料 + Power BI 專案
@@ -110,7 +143,8 @@ $env:PBI_DATASET = "superstore"
 | `simulator/` | Oracle schema、主檔資料、含情境注入的每日資料產生器 |
 | `powerbi/` | Power BI 專案產生器、Report Server 用的傳統 `.pbix` 轉換器、報表檔案 |
 | `analysis/` | 語意層（解析 TMDL/PBIR/DAX）、快照、變化分析引擎、報告、MCP Server |
-| `agent/` | 本機 Ollama Agent、數字查核、問答題庫 |
+| `prism/` | PRISM 入口網站：上傳、處理工作、每份報表的問答服務、報表地圖 |
+| `agent/` | 本機 Ollama Agent、數字查核、問答題庫、問答頁面 |
 | `scripts/` | 啟動容器、排程、Report Server 安裝與發佈 |
 | `docker/` | Oracle Database Free + SQL Server Developer（Report Server 目錄資料庫） |
 | `datasets/` | 用同一套引擎分析的其他報表（Excel 上的 Global Superstore）、跨報表測試用的財務部報表 |
@@ -118,6 +152,7 @@ $env:PBI_DATASET = "superstore"
 
 ## 文件
 
+- [docs/prism.md](docs/prism.md)：PRISM：安裝、上傳、各頁面、API、在網路上分享
 - [docs/powerbi-setup.md](docs/powerbi-setup.md)：Power BI 專案、模型與報表頁面
 - [docs/analysis.md](docs/analysis.md)：分析引擎如何讀取模型、偵測變化、選出能解釋變化的範圍
 - [docs/agent.md](docs/agent.md)：MCP 工具、數字查核、問答評分

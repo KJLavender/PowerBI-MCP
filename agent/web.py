@@ -50,6 +50,7 @@ app = FastAPI(lifespan=lifespan)
 # the published report next to the chat; datasets that are not on Report Server get the chat page only
 # links put in mail must open on the colleague's machine: set PUBLIC_URL to this server's address on the network
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "")
+PRISM_URL = os.environ.get("PRISM_URL", "")  # the PRISM portal that started this chat, for the way back
 REPORT_URL = os.environ.get("REPORT_URL", "http://localhost:8081/Reports/powerbi/RetailSales"
                             if dataset.NAME == "retail" else "")
 
@@ -79,7 +80,24 @@ async def info():
     sep = "&" if "?" in REPORT_URL else "?"
     return {"model": State.model, "latest": latest_date() or State.agent.latest, "examples": EXAMPLES,
             "metrics": State.agent.metrics, "report_url": REPORT_URL,
-            "report_embed_url": f"{REPORT_URL}{sep}rs:embed=true"}
+            "report_embed_url": f"{REPORT_URL}{sep}rs:embed=true", "portal": PRISM_URL,
+            "report": dataset.NAME}
+
+
+@app.get("/api/visuals")
+async def visuals_list():
+    """The report's pages and visuals (from its layout), so a chat without the report next to it can still
+    point at a visual."""
+    try:
+        _, _, infos = tools.report_visuals()
+    except Exception:  # noqa: BLE001 - a dataset without a report layout simply has no list
+        return []
+    pages: dict[str, list] = {}
+    for v in infos:
+        if not v.hidden_page:
+            pages.setdefault(v.page, []).append({"title": v.title or v.kind, "kind": v.kind,
+                                                 "author": bool([e for e in v.emphasis if e.explicit])})
+    return [{"page": p, "visuals": vs} for p, vs in pages.items()]
 
 
 @app.get("/api/context-options")

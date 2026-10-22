@@ -8,6 +8,7 @@
   python -m analysis reconcile [--port P]             compare with the numbers Power BI Desktop computes (DAX)
   python -m analysis import-pbix FILE.pbix --name N   new dataset from a .pbix (read from the file; --desktop: via
                                                       Power BI Desktop)
+  python -m analysis import-excel BOOK.xlsx --name N   an Excel workbook next to the reports (for the catalog)
   python -m analysis intent [REPORT]                  what the author emphasises (rules, target lines, highlights)
   python -m analysis catalog [--no-data]              all reports in one graph: shared sources, same / clashing
                                                       measures, key matches between systems → reports/catalog.md
@@ -16,6 +17,7 @@ The report analysed is chosen with PBI_DATASET (default: retail; e.g. PBI_DATASE
 """
 import argparse
 from datetime import date, timedelta
+from pathlib import Path
 
 from . import context, dataset, evaluate, report, sources, store
 
@@ -141,8 +143,16 @@ def main() -> None:
     s.add_argument("--port", type=int)
     s.add_argument("--title")
     s.add_argument("--desktop", action="store_true", help="read the model through Power BI Desktop, not the file")
+    s.add_argument("--root", type=Path, help="parent folder of the dataset (default datasets/; PRISM: workspace/)")
     s.set_defaults(func=lambda a: __import__("analysis.pbix", fromlist=["main"]).main(a.file, a.name, a.port, a.title,
-                                                                                     a.desktop))
+                                                                                     a.desktop, a.root))
+    s = sub.add_parser("import-excel", help="add an Excel workbook to the catalog (its sheets as tables)")
+    s.add_argument("file")
+    s.add_argument("--name", required=True)
+    s.add_argument("--title")
+    s.add_argument("--root", type=Path)
+    s.set_defaults(func=lambda a: __import__("analysis.workbook", fromlist=["import_workbook"]).import_workbook(
+        a.file, a.name, a.title, a.root))
     s = sub.add_parser("intent", help="what the report's author emphasises")
     s.add_argument("report", nargs="?", help="dataset name, .pbix file or *.Report folder (default: PBI_DATASET)")
     s.add_argument("--out")

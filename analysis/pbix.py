@@ -587,9 +587,11 @@ def open_report(pbix: Path, wait: int = 300) -> tuple[int, str]:
     return int(found[0]["port"]), title
 
 
-def main(file: str | None, name: str, port: int | None, title: str | None, desktop: bool = False) -> None:
+def main(file: str | None, name: str, port: int | None, title: str | None, desktop: bool = False,
+         root: Path | None = None) -> None:
+    """root: where the dataset folder goes (datasets/ by default; PRISM uploads go to workspace/)."""
     pbix = Path(file).resolve() if file else None
-    home = ROOT / "datasets" / name
+    home = (root or ROOT / "datasets") / name
     out = home / "powerbi"
     model = None
     if pbix and port is None and not title and not desktop:

@@ -6,6 +6,9 @@
 The data source is whatever the Power BI model's partitions read (Oracle tables, Excel sheets);
 snapshots and generated reports are kept per dataset.
 
+Datasets live in datasets/<name> (examples kept in git) or workspace/<name> (reports people upload in PRISM,
+outside git).
+
 PBI_VARIANT=<name> reads another workbook listed under `variants:` in the dataset config instead of the
 one in the model (e.g. the original workbook without injected events), with its own snapshots.
 """
@@ -25,6 +28,8 @@ if NAME == "retail":
     QUESTIONS = ROOT / "agent" / "questions.yaml"
 else:
     HOME = ROOT / "datasets" / NAME
+    if not HOME.is_dir() and (ROOT / "workspace" / NAME).is_dir():
+        HOME = ROOT / "workspace" / NAME
     if not HOME.is_dir():
         raise SystemExit(f"PBI_DATASET={NAME}: folder {HOME} does not exist")
     PBIP_DIR = HOME / "powerbi"

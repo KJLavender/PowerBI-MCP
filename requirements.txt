@@ -8,3 +8,4 @@ fastapi>=0.110
 uvicorn[standard]>=0.29
 openpyxl>=3.1
 pbixray>=0.15
+python-multipart>=0.0.9

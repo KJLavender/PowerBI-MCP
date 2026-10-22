@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PRISM — Proven Report Insights & Semantic Mapping</title>
+<link rel="stylesheet" href="/static/prism.css">
+<script src="/static/prism.js"></script>
+</head>
+<body>
+<script>header("home")</script>
+
+<section class="hero">
+  <div class="in">
+    <div>
+      <h1>PRISM</h1>
+      <div class="full">Proven Report Insights &amp; Semantic Mapping</div>
+      <p class="lead">上傳你的 Power BI 報表（.pbix）和相關的 Excel，就能直接問：「為什麼這個月掉了？」「紅色是什麼意思？」
+        「財務部那份的營收跟我們的一樣嗎？」——數字由程式依報表的模型計算，每個回答都逐項查核，資料不離開這台電腦。</p>
+      <div class="points">
+        <div class="card point"><b>有證據的回答</b><span>數字照模型的量值與關聯計算；查核不過的回答不會給你看</span></div>
+        <div class="card point"><b>看懂畫面上的圖</b><span>從報表檔案讀出作者的顏色規則、目標線；不是看截圖猜</span></div>
+        <div class="card point"><b>報表與 Excel 的關係</b><span>同名不同義的量值、對不上的代碼，一張地圖看清楚</span></div>
+      </div>
+    </div>
+    <form class="card upload" id="uploadForm">
+      <div class="drop" id="drop">
+        <div class="big">把 .pbix 拖到這裡，或點一下選擇</div>
+        <div class="hint">不需要安裝 Power BI；檔案只存在這台伺服器</div>
+        <input type="file" id="pbix" accept=".pbix" hidden>
+      </div>
+      <div class="files" id="pbixName"></div>
+      <label class="field">相關的 Excel（選填，可多個）
+        <input type="file" id="excel" accept=".xlsx,.xlsm" multiple>
+        <div class="hint">例如報表的資料來源、目標或預算表：PRISM 會比對它和報表對不對得起來</div></label>
+      <label class="field">報表名稱（選填）<input id="title" placeholder="預設用檔名"></label>
+      <label class="field">已發佈報表的網址（選填）<input id="reportUrl" placeholder="例如 http://報表伺服器/Reports/powerbi/Sales">
+        <div class="hint">有填的話，問答會放在報表旁邊；沒填就只有問答</div></label>
+      <div style="margin-top:16px; display:flex; gap:10px; align-items:center">
+        <button class="primary" id="submit" type="submit" disabled>上傳並分析</button>
+        <span class="muted" id="uploadMsg"></span>
+      </div>
+      <ul class="steps" id="steps"></ul>
+    </form>
+  </div>
+</section>
+
+<div class="wrap">
+  <div class="card notice" id="modelNotice" hidden></div>
+  <div class="toolbar"><h2 style="margin:0">我的報表</h2><span class="spacer" style="flex:1"></span>
+    <a class="btn" href="/map">看報表地圖 →</a></div>
+  <p class="muted">上傳的報表在前面；範例報表可以直接試用。</p>
+  <div class="grid" id="reports"><div class="empty">載入中…</div></div>
+</div>
+<footer>PRISM · 所有計算都在這台電腦上執行 · <a href="/how">它是怎麼運作的？</a></footer>
+
+<script>
+const drop = $("#drop"), pbix = $("#pbix");
+drop.onclick = () => pbix.click();
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+  const files = [...e.dataTransfer.files];
+  const p = files.find((f) => f.name.toLowerCase().endsWith(".pbix"));
+  const xs = files.filter((f) => /\.xls[xm]$/i.test(f.name));
+  if (p) { const dt = new DataTransfer(); dt.items.add(p); pbix.files = dt.files; }
+  if (xs.length) { const dt = new DataTransfer(); xs.forEach((x) => dt.items.add(x)); $("#excel").files = dt.files; }
+  pbixChanged();
+};
+pbix.onchange = pbixChanged;
+function pbixChanged() {
+  const f = pbix.files[0];
+  $("#pbixName").textContent = f ? `報表：${f.name}（${(f.size / 1048576).toFixed(1)} MB）` : "";
+  $("#submit").disabled = !f;
+}
+
+$("#uploadForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append("pbix", pbix.files[0]);
+  for (const x of $("#excel").files) fd.append("excel", x);
+  fd.append("title", $("#title").value); fd.append("report_url", $("#reportUrl").value);
+  $("#submit").disabled = true; $("#uploadMsg").textContent = "上傳中…";
+  try {
+    const job = await api("/api/reports", { method: "POST", body: fd });
+    $("#uploadMsg").textContent = `處理「${job.title}」`;
+    follow(job.id);
+  } catch (err) { $("#uploadMsg").textContent = err.message; $("#submit").disabled = false; }
+};
+
+async function follow(id) {
+  const job = await api(`/api/jobs/${id}`);
+  $("#steps").innerHTML = job.steps.map((s) =>
+    `<li class="${s.status}"><span class="dot"></span><div>${esc(s.title)}${s.detail ? `<pre>${esc(s.detail)}</pre>` : ""}</div></li>`).join("");
+  if (job.status === "running") return setTimeout(() => follow(id), 1500);
+  $("#uploadMsg").textContent = job.status === "done" ? "完成，可以開始問了" : `失敗：${job.error}`;
+  $("#submit").disabled = false; loadReports();
+}
+
+async function loadReports() {
+  const list = await api("/api/reports");
+  const kids = {};
+  for (const r of list) if (r.parent) (kids[r.parent] ||= []).push(r);
+  const cards = list.filter((r) => !r.parent).map((r) => {
+    const status = r.status === "ready" ? (r.chat ? `<span class="badge ok">可以問</span>` : `<span class="badge">已加入地圖</span>`)
+      : r.status === "failed" ? `<span class="badge bad">處理失敗</span>` : `<span class="badge warn">處理中</span>`;
+    const books = (kids[r.name] || []).map((k) => `<div>📗 ${esc(k.title)}</div>`).join("");
+    return `<div class="card report">
+      <div class="badges"><span class="badge brand">${r.kind === "workbook" ? "Excel" : "報表"}</span>
+        <span class="badge">${r.origin === "example" ? "範例" : "上傳 " + when(r.created_at)}</span>${status}</div>
+      <h3>${esc(r.title || r.name)}</h3>
+      ${r.error ? `<div class="sub" style="color:var(--bad)">${esc(r.error)}</div>` : ""}
+      ${r.report_url ? `<div class="sub">報表：<a href="${esc(r.report_url)}" target="_blank" rel="noopener">${esc(r.report_url)}</a></div>` : ""}
+      ${books ? `<div class="children">${books}</div>` : ""}
+      <div class="actions">
+        ${r.chat ? `<button class="primary" onclick="openChat('${r.name}', this)">開啟問答</button>` : ""}
+        ${r.kind !== "workbook" ? `<label class="btn">加入 Excel<input type="file" accept=".xlsx,.xlsm" multiple hidden onchange="addExcel('${r.name}', this)"></label>` : ""}
+        ${r.origin === "uploaded" ? `<button class="danger" onclick="removeReport('${r.name}')">刪除</button>` : ""}
+      </div></div>`;
+  });
+  $("#reports").innerHTML = cards.join("") || `<div class="empty">還沒有報表，從上面上傳一份 .pbix。</div>`;
+}
+
+async function openChat(name, btn) {
+  const text = btn.textContent; btn.disabled = true; btn.textContent = "啟動中（第一次約半分鐘）…";
+  try { const { url } = await api(`/api/reports/${name}/open`, { method: "POST" }); window.open(url, "_blank"); }
+  catch (err) { alert(err.message); }
+  btn.disabled = false; btn.textContent = text;
+}
+async function addExcel(name, input) {
+  const fd = new FormData(); for (const x of input.files) fd.append("excel", x);
+  try { const job = await api(`/api/reports/${name}/excel`, { method: "POST", body: fd }); window.scrollTo(0, 0); follow(job.id); }
+  catch (err) { alert(err.message); }
+}
+async function removeReport(name) {
+  if (!confirm("刪除這份報表與它的分析資料、對話？")) return;
+  await api(`/api/reports/${name}`, { method: "DELETE" }); loadReports();
+}
+loadReports();
+
+// the chats need the local model; say what is missing instead of failing at the first question
+async function checkModel() {
+  const m = await api("/api/model"), box = $("#modelNotice");
+  const text = {
+    checking: "正在檢查本機模型…",
+    no_ollama: `找不到本機模型服務 Ollama（${esc(m.host)}）。上傳與報表地圖可以用，問答需要它：安裝 <a href="https://ollama.com/download" target="_blank" rel="noopener">Ollama</a> 後重新整理這一頁。`,
+    pulling: `第一次使用，正在下載問答用的本機模型 ${esc(m.model)}（${esc(m.detail)}）…下載完才能問答。`,
+    pull_failed: `下載模型 ${esc(m.model)} 失敗：${esc(m.detail)}。可以在命令列執行 <code>ollama pull ${esc(m.model)}</code>。`,
+  }[m.state];
+  box.hidden = !text; box.innerHTML = text || "";
+  if (m.state !== "ready") setTimeout(checkModel, m.state === "pulling" || m.state === "checking" ? 3000 : 15000);
+}
+checkModel();
+</script>
+</body>
+</html>

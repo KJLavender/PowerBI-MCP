@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote, unquote as url_unquote
 
+import yaml
+
 from . import intent, semantic
 from .dataset import ROOT
 from .semantic import SemanticModel, Table, Unsupported, tokenize, unquote
@@ -36,7 +38,7 @@ MIN_CONTAINMENT = 0.5     # share of the smaller column's values found in the ot
 # path costs: links of meaning are cheaper than sharing a column or a table
 EDGE_COST = {"同義": 0.5, "引用": 1.0, "模型關聯": 1.0, "跨系統代碼對應": 1.0, "跨報表值重疊": 1.5, "同名但定義不同": 1.5, "同名（不同系統": 3.0,
              "計算自": 1.5, "來自": 1.0, "欄位": 1.0, "量值": 1.5, "讀取": 2.0, "凸顯": 1.0, "包含資料表": 3.0}
-KEY = re.compile(r"(?:oracle|excel|csv):[^\s,()|\[\]]+")
+KEY = re.compile(r"(?:oracle|sql|excel|csv|pbix):[^\s,()|\[\]]+")
 
 
 # ------------------------------------------------------------------------------------------- reports
@@ -47,25 +49,32 @@ class Report:
     pbip: Path
     model: SemanticModel
     emphasis: list = field(default_factory=list)
+    source: dict = field(default_factory=dict)   # the dataset's analysis source (source: pbix → data in the file)
 
 
 def discover() -> list[tuple[str, Path]]:
+    """Every dataset: the retail report, the examples in datasets/ and what was uploaded to workspace/."""
     out = [("retail", ROOT / "powerbi")]
-    for d in sorted((ROOT / "datasets").iterdir()):
-        if any((d / "powerbi").glob("*.SemanticModel")):
-            out.append((d.name, d / "powerbi"))
+    for base in (ROOT / "datasets", ROOT / "workspace"):
+        for d in sorted(base.iterdir()) if base.is_dir() else []:
+            if any((d / "powerbi").glob("*.SemanticModel")) and any((d / "powerbi").glob("*.Report")):
+                out.append((d.name, d / "powerbi"))
     return out
 
 
 def load_reports(names: list[str] | None = None) -> list[Report]:
     out = []
     for name, pbip in discover():
-        if names and name not in names:
+        if names is not None and name not in names:
             continue
         report_dir = next(pbip.glob("*.Report"))
         model = semantic.load(pbip)
         percent = {m.name for m in model.measures.values() if "%" in m.format_string}
-        out.append(Report(name, report_dir.name[:-len(".Report")], pbip, model, intent.extract(report_dir, percent)))
+        config = pbip.parent / "analysis.yaml" if name != "retail" else ROOT / "analysis" / "config.yaml"
+        source = (yaml.safe_load(config.read_text(encoding="utf-8")) or {}).get("source") or {} \
+            if config.exists() else {}
+        out.append(Report(name, report_dir.name[:-len(".Report")], pbip, model, intent.extract(report_dir, percent),
+                          source))
     return out
 
 
@@ -87,6 +96,12 @@ def source_id(t: Table) -> str | None:
         server, schema = (s.get("server") or "?").strip().lower(), (s.get("schema") or "?").upper()
         sid = f"oracle:{_q(server)}/{_q(schema)}/{_q(t.source_table.upper())}"
         LABELS.setdefault(sid, f"Oracle {schema}.{t.source_table.upper()}")
+        return sid
+    if s.get("kind") == "sql" and t.source_table:
+        server = (s.get("server") or "?").strip().lower()
+        db = f"{s.get('database') or '?'}.{s.get('schema') or 'dbo'}"
+        sid = f"sql:{_q(server)}/{_q(db.upper())}/{_q(t.source_table.upper())}"
+        LABELS.setdefault(sid, f"SQL Server {db}.{t.source_table}")
         return sid
     if s.get("kind") in ("excel", "csv") and s.get("file"):
         path = str(s["file"]).replace("\\", "/")
@@ -127,6 +142,17 @@ def column_source(t: Table, column: str) -> str | None:
         if new.replace('""', '"') == src:
             src = old.replace('""', '"')
     return f"{sid}/{_q(src.upper() if sid.startswith('oracle:') else src)}"
+
+
+def col_key(report: "Report", table: str, column: str) -> str | None:
+    """The physical column; for a report imported from a .pbix whose source this machine does not know
+    (a database on the author's network …), the column as stored in that .pbix."""
+    key = column_source(report.model.tables[table], column)
+    if key is None and report.source.get("kind") == "pbix" and column in report.model.tables[table].columns:
+        sid = f"pbix:{_q(report.name)}/{_q('')}/{_q(table)}"
+        LABELS.setdefault(sid, f"{report.title}.pbix／{table}")
+        key = f"{sid}/{_q(column)}"
+    return key
 
 
 def short(key: str) -> str:
@@ -507,16 +533,30 @@ class Values:
         self._frames: dict[str, object] = {}
 
     def get(self, report: Report, table: str, column: str) -> set[str] | None:
-        key = column_source(report.model.tables[table], column)
+        key = col_key(report, table, column)
         if key is None:
             return None
-        if key not in self.cache:
+        cache_key = (key, report.source.get("file")) if report.source.get("kind") == "pbix" else key
+        if cache_key not in self.cache:
             try:
-                self.cache[key] = self._read(report.model.tables[table], column, key)
+                self.cache[cache_key] = self._from_pbix(report, table, column) \
+                    if report.source.get("kind") == "pbix" else self._read(report.model.tables[table], column, key)
             except Exception as e:  # source unreachable / file missing: compare what can be read
                 self.notes.append(f"讀不到 {short(key)}：{e}")
-                self.cache[key] = None
-        return self.cache[key]
+                self.cache[cache_key] = None
+        return self.cache[cache_key]
+
+    def _from_pbix(self, report: Report, table: str, column: str) -> set[str] | None:
+        """The values the report imported, read from its .pbix (the author's sources are not reachable here)."""
+        path = report.source["file"]
+        if path not in self._frames:
+            from .pbix import open_pbix
+            self._frames[path] = open_pbix(Path(path))
+        df = self._frames[path].get_table(table)
+        if column not in df.columns:
+            return None
+        values = df[column].dropna().unique()
+        return None if len(values) > DISTINCT_LIMIT else {_norm(v) for v in values}
 
     def _read(self, t: Table, column: str, key: str) -> set[str] | None:
         if key.startswith("oracle:"):
@@ -569,6 +609,7 @@ def _numeric_share(values: set[str]) -> float:
 @dataclass
 class KeyMatch:
     kind: str                  # relationship (between systems) | orphans (inside one system) | overlap (between reports)
+    #                            | same_file (a column of the same workbook / sheet at two paths)
     left: list[str]            # report:table[column] on each report that has this pair
     right: list[str]
     left_source: str
@@ -579,10 +620,34 @@ class KeyMatch:
     near: list[tuple[str, str]]   # (value, value on the other side) equal apart from case / spaces
     left_count: int
     right_count: int
+    note: str = ""             # e.g. the same values in another format (Excel text dates, converted by Power Query)
 
     @property
     def containment(self) -> float:
         return self.shared / max(1, min(self.left_count, self.right_count))
+
+
+def _as_dates(a: set[str], b: set[str]) -> str:
+    """Same values written as text on one side and as dates on the other ("2017 Aug" ↔ 2017-08-01)?"""
+    import pandas as pd
+
+    def dates(values) -> dict[str, str] | None:
+        """date → the value as written"""
+        values = sorted(values)
+        try:
+            parsed = pd.to_datetime(pd.Series(values), errors="coerce", format="mixed")
+        except (ValueError, TypeError):
+            return None
+        if parsed.isna().mean() > 0.05:
+            return None
+        return {d.date().isoformat(): v for v, d in zip(values, parsed) if not pd.isna(d)}
+
+    da, db = dates(a), dates(b)
+    if not da or not db or set(da) != set(db):
+        return ""
+    day = min(da)
+    sample_a, sample_b = da[day], db[day]
+    return f"格式不同但轉成日期後完全一致（「{sample_a}」↔「{sample_b}」）：Power Query 做了型別轉換"
 
 
 def compare(a: set[str], b: set[str]) -> tuple[int, list[str], list[str], list[tuple[str, str]]]:
@@ -782,7 +847,7 @@ def _key_matches(reports: list[Report], notes: list[str]) -> list[KeyMatch]:
     found: dict[tuple[str, str], KeyMatch] = {}
 
     def add(kind, ra, ta, ca, rb, tb, cb):
-        ka, kb = column_source(ra.model.tables[ta], ca), column_source(rb.model.tables[tb], cb)
+        ka, kb = col_key(ra, ta, ca), col_key(rb, tb, cb)
         pair = (ka, kb)
         if pair in found:  # the same physical pair seen from another report
             found[pair].left.append(f"{ra.name}:{ta}[{ca}]")
@@ -792,8 +857,13 @@ def _key_matches(reports: list[Report], notes: list[str]) -> list[KeyMatch]:
         if not a or not b:
             return None
         shared, left, right, near = compare(a, b)
+        note = ""
+        if shared == 0 and kind == "same_file":
+            note = _as_dates(a, b)
+            if note:
+                left, right = [], []
         km = KeyMatch(kind, [f"{ra.name}:{ta}[{ca}]"], [f"{rb.name}:{tb}[{cb}]"], ka, kb, shared, left, right, near,
-                      len(a), len(b))
+                      len(a), len(b), note)
         found[pair] = km
         return km
 
@@ -804,12 +874,32 @@ def _key_matches(reports: list[Report], notes: list[str]) -> list[KeyMatch]:
                 continue
             kind = "orphans" if system_of(source_id(ft)) == system_of(source_id(tt)) else "relationship"
             add(kind, r, rel.from_table, rel.from_column, r, rel.to_table, rel.to_column)
+    # the same workbook / sheet at another path (an uploaded copy of a report's Excel source): every column the
+    # two have in common is compared, so "it is the same file" is checked on the data, not taken from the name
+    by_file = {}
+    for r in reports:
+        for t in r.model.tables.values():
+            sid = source_id(t)
+            if sid and sid.split(":", 1)[0] in ("excel", "csv"):
+                path, _, item = sid.split(":", 1)[1].partition("//")
+                by_file.setdefault((url_unquote(path).rsplit("/", 1)[-1], item), []).append((r, t, sid))
+    for uses in by_file.values():
+        for i in range(len(uses)):
+            for j in range(i + 1, len(uses)):
+                (ra, ta, sa), (rb, tb, sb) = uses[i], uses[j]
+                if ra.name == rb.name or system_of(sa) == system_of(sb):
+                    continue
+                cols_b = {(c.source_column or c.name): c.name for c in tb.columns.values()}
+                for c in list(ta.columns.values())[:30]:
+                    other = cols_b.get(c.source_column or c.name)
+                    if other:
+                        add("same_file", ra, ta.name, c.name, rb, tb.name, other)
     # between reports: text columns of different systems
     cand = []
     for r in reports:
         for t in r.model.tables.values():
             for c in t.columns.values():
-                key = column_source(t, c.name)
+                key = col_key(r, t.name, c.name)
                 if key and c.data_type == "string":
                     cand.append((r, t.name, c.name, key))
     for i in range(len(cand)):
@@ -897,7 +987,8 @@ def _graph(cat: Catalog) -> None:
                           "同名但定義不同" if cf.same_system else "同名（不同系統，非同一件事）",
                           f"measure:{b[0].report}:{b[0].measure}"))
     for k in cat.keys:
-        rel = {"relationship": "跨系統代碼對應", "orphans": "關聯有孤兒值", "overlap": "跨報表值重疊"}[k.kind]
+        rel = {"relationship": "跨系統代碼對應", "orphans": "關聯有孤兒值", "overlap": "跨報表值重疊",
+               "same_file": "同一份檔案的同一欄"}[k.kind]
         E.append(("column:" + k.left[0], f"{rel}（相同 {k.shared} 個）", "column:" + k.right[0]))
     cat.edges[:] = list(dict.fromkeys(E))
 
@@ -973,7 +1064,8 @@ def to_markdown(cat: Catalog) -> str:
     if not cat.conflicts:
         L += ["（沒有）", ""]
     L += ["## 代碼對應（讀實際資料比對）", ""]
-    titles = {"relationship": "模型關聯跨兩個系統", "orphans": "關聯的多方有對不到的值（孤兒）",
+    titles = {"same_file": "同名檔案的同一張工作表、同名欄位（可能是同一份檔案的副本）",
+              "relationship": "模型關聯跨兩個系統", "orphans": "關聯的多方有對不到的值（孤兒）",
               "overlap": "不同報表、不同系統的欄位值重疊（可能可以串接）"}
     if cat.keys:
         for k in cat.keys:
@@ -983,6 +1075,8 @@ def to_markdown(cat: Catalog) -> str:
             L.append(f"- 來源：{short(k.left_source)}（{k.left_count} 個值） ↔ {short(k.right_source)}"
                      f"（{k.right_count} 個值），相同 {k.shared} 個")
             near_l, near_r = {a for a, _ in k.near}, {b for _, b in k.near}
+            if k.note:
+                L.append(f"- {k.note}")
             if k.near:
                 L.append(f"- 只差大小寫或空白：{'、'.join(f'「{a}」≈「{b}」' for a, b in k.near)}")
             lo = [v for v in k.left_only if v not in near_l]
@@ -991,7 +1085,7 @@ def to_markdown(cat: Catalog) -> str:
                 L.append(f"- 只在 {short(k.left_source)}：{_list(lo)}")
             if ro and k.kind != "orphans":
                 L.append(f"- 只在 {short(k.right_source)}：{_list(ro)}")
-            if not (lo or ro or k.near):
+            if not (lo or ro or k.near or k.note):
                 L.append("- 完全一致")
             L.append("")
     else:

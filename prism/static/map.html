@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>報表地圖 · PRISM</title>
+<link rel="stylesheet" href="/static/prism.css">
+<script src="/static/prism.js"></script>
+</head>
+<body>
+<script>header("map")</script>
+<div class="wrap">
+  <div class="toolbar">
+    <h1 style="margin:0; font-size:26px">報表地圖</h1><span style="flex:1"></span>
+    <label class="muted">只看 <select id="focus"><option value="">全部報表</option></select></label>
+    <button id="rebuild">重新分析</button>
+  </div>
+  <p class="muted">所有報表與 Excel 之間的關係：讀同一個資料來源、名稱不同但意思相同的量值、名稱相同但算法不同的量值、
+    代碼對不對得起來。全部由報表檔案（模型、Power Query、版面）與實際資料比對得出，不是從名稱猜的。</p>
+  <div id="status" class="muted"></div>
+  <div class="stats" id="stats"></div>
+
+  <h2>關係圖</h2>
+  <div class="card graph"><svg id="graph"></svg>
+    <div class="legend"><span><i style="background:#cbd5e1"></i>讀取同一個來源</span><span><i style="background:#16a34a"></i>名稱不同、意思相同</span>
+      <span><i style="background:#dc2626"></i>同名但算法不同</span><span><i style="background:#d97706"></i>代碼對不上</span>
+      <span><i style="background:#0ea5e9"></i>代碼一致 / 同一份檔案</span><span><i style="background:#a855f7"></i>值重疊（可能可以串接）</span></div></div>
+
+  <h2>同名但算法不同 <span class="muted" style="font-size:14px">（兩份報表的數字會對不起來）</span></h2>
+  <div id="conflicts"></div>
+  <h2>名稱不同、意思相同</h2>
+  <div id="synonyms"></div>
+  <h2>代碼與資料比對</h2>
+  <div id="keys"></div>
+  <h2>共用的資料來源</h2>
+  <div id="sources"></div>
+  <h2>報表作者的設定</h2>
+  <div id="emphasis"></div>
+  <h2>無法比對的量值</h2>
+  <div id="unexpanded"></div>
+</div>
+<footer>PRISM · 報表地圖</footer>
+
+<script>
+let DATA = null;
+async function load() {
+  const m = await api("/api/map");
+  if (m.status === "building" && !m.data) { $("#status").textContent = "正在分析所有報表與 Excel（第一次可能要幾分鐘）…"; return setTimeout(load, 3000); }
+  if (m.status === "failed") $("#status").textContent = `分析失敗：${m.error}`;
+  else $("#status").textContent = m.status === "building" ? "正在更新…（顯示的是上一次的結果）" : `更新於 ${when(m.built_at)}`;
+  if (m.status === "building") setTimeout(load, 3000);
+  DATA = m.data;
+  if (!DATA) return;
+  const sel = $("#focus"), cur = sel.value;
+  sel.innerHTML = `<option value="">全部報表</option>` + DATA.items.map((i) => `<option value="${i.name}">${esc(i.title)}</option>`).join("");
+  sel.value = cur;
+  render();
+}
+$("#focus").onchange = render;
+$("#rebuild").onclick = async () => { await api("/api/map/rebuild", { method: "POST" }); load(); };
+
+const title = (n) => DATA.items.find((i) => i.name === n)?.title || n;
+const mine = (names) => !$("#focus").value || names.includes($("#focus").value);
+
+function render() {
+  const f = $("#focus").value;
+  const conflicts = DATA.conflicts.filter((c) => c.same_system && mine(c.groups.flatMap((g) => g.members.map((m) => m.report))));
+  const synonyms = DATA.synonyms.filter((s) => s.renamed && mine(s.members.map((m) => m.report)));
+  const keys = DATA.keys.filter((k) => mine([k.left[0].split(":")[0], k.right[0].split(":")[0]]));
+  const shared = DATA.sources.filter((s) => s.used_by.length > 1 && mine(s.used_by));
+  const issues = keys.filter((k) => k.ok === false);
+  $("#stats").innerHTML = [
+    [DATA.items.filter((i) => i.kind !== "workbook").length, "份報表"], [DATA.items.filter((i) => i.kind === "workbook").length, "份 Excel"],
+    [shared.length, "個共用來源"], [synonyms.length, "組同義量值"], [conflicts.length, "個同名不同義"], [issues.length, "個代碼問題"],
+  ].map(([n, t]) => `<div class="card stat"><b>${n}</b><span>${t}</span></div>`).join("");
+
+  $("#conflicts").innerHTML = conflicts.map((c) => `<div class="card finding"><h3>「${esc(c.name)}」</h3>
+      ${c.groups.map((g) => `<div>${g.members.map((m) => `<span class="chip">${esc(m.title)}</span>`).join(" ")}<div class="formula">${esc(g.formula)}</div></div>`).join("")}</div>`).join("")
+    || `<div class="empty">沒有。</div>`;
+  $("#synonyms").innerHTML = synonyms.map((s) => `<div class="card finding">
+      <div class="chips">${s.members.map((m) => `<span class="chip">${esc(m.title)}「${esc(m.measure)}」</span>`).join("")}</div>
+      <div class="formula">${esc(s.formula)}</div></div>`).join("") || `<div class="empty">沒有。</div>`;
+  const joins = {};
+  for (const k of keys.filter((k) => k.ok === null)) {
+    const pair = [k.left[0].split(":")[0], k.right[0].split(":")[0]];
+    (joins[pair.join("|")] ||= { pair, cols: [] }).cols.push(k);
+  }
+  const joinCards = Object.values(joins).map(({ pair, cols }) => `<div class="card finding">
+      <h3>🔗 ${esc(title(pair[0]))} ↔ ${esc(title(pair[1]))}</h3>
+      <div class="muted">這些欄位有相同的值，兩份報表可能可以用它們串接（不是錯誤）：</div>
+      <ul style="margin:4px 0 0 18px; padding:0">${cols.map((k) => `<li>${esc(k.left.join("、").split(":").pop())} ↔ ${esc(k.right.join("、").split(":").pop())}：相同 ${k.shared} 個值（${k.left_count} / ${k.right_count}）</li>`).join("")}</ul></div>`);
+  $("#keys").innerHTML = keys.filter((k) => k.ok !== null).map((k) => `<div class="card finding">
+      <h3>${k.ok ? "✅" : "⚠️"} ${esc(k.left.join("、"))} ↔ ${esc(k.right.join("、"))}</h3>
+      <div class="sub">${esc(k.kind_text)}：${esc(k.left_source)}（${k.left_count} 個值） ↔ ${esc(k.right_source)}（${k.right_count} 個值），相同 ${k.shared} 個</div>
+      ${k.note ? `<div>${esc(k.note)}</div>` : ""}
+      ${k.near.length ? `<div>只差大小寫或空白：${k.near.map(([a, b]) => `<span class="chip warn">「${esc(a)}」≈「${esc(b)}」</span>`).join(" ")}</div>` : ""}
+      ${k.left_only.length ? `<div>只在 ${esc(k.left_source)}（${k.left_only_n}）：${k.left_only.slice(0, 15).map((v) => `<span class="chip bad">${esc(v)}</span>`).join(" ")}</div>` : ""}
+      ${k.right_only.length ? `<div>只在 ${esc(k.right_source)}（${k.right_only_n}）：${k.right_only.slice(0, 15).map((v) => `<span class="chip bad">${esc(v)}</span>`).join(" ")}</div>` : ""}
+      ${k.ok === true && !k.note ? `<div class="muted">完全一致</div>` : ""}
+</div>`).concat(joinCards).join("") || `<div class="empty">沒有需要比對的代碼。</div>`;
+  $("#sources").innerHTML = shared.map((s) => `<div class="card finding"><b>${esc(s.label)}</b>
+      <div class="chips">${s.used_by.map((n) => `<span class="chip">${esc(title(n))}</span>`).join("")}</div></div>`).join("")
+    || `<div class="empty">沒有。</div>`;
+  $("#emphasis").innerHTML = DATA.items.filter((i) => i.emphasis.length && (!f || i.name === f)).map((i) => `<div class="card finding">
+      <h3>${esc(i.title)}</h3><ul style="margin:4px 0 0 18px; padding:0">${i.emphasis.map((e) => `<li>${esc(e)}</li>`).join("")}</ul></div>`).join("")
+    || `<div class="empty">沒有條件式格式、目標線或凸顯設定。</div>`;
+  const un = DATA.unexpanded.filter((u) => !f || u.report === f);
+  $("#unexpanded").innerHTML = un.length ? `<div class="card finding"><div class="sub">用到還不支援的 DAX，不會被當成相同或不同：</div>
+      <ul style="margin:4px 0 0 18px; padding:0">${un.slice(0, 40).map((u) => `<li>${esc(title(u.report))}「${esc(u.measure)}」：${esc(u.reason)}</li>`).join("")}</ul></div>` : `<div class="empty">沒有。</div>`;
+  drawGraph();
+}
+
+function drawGraph() {
+  const svg = $("#graph"), W = svg.clientWidth || 1100, H = 520, f = $("#focus").value;
+  const items = DATA.items, cx = W / 2, cy = H / 2;
+  const pos = {};
+  items.forEach((it, i) => {
+    const a = (i / items.length) * Math.PI * 2 - Math.PI / 2;
+    pos[it.name] = [cx + Math.cos(a) * Math.min(W * 0.36, 380), cy + Math.sin(a) * 190];
+  });
+  const shared = DATA.systems;
+  shared.forEach((s, i) => {
+    const xs = s.used_by.map((n) => pos[n]).filter(Boolean);
+    const mx = xs.reduce((a, p) => a + p[0], 0) / xs.length, my = xs.reduce((a, p) => a + p[1], 0) / xs.length;
+    pos["src:" + s.id] = [cx + (mx - cx) * 0.35 + (i % 3 - 1) * 26, cy + (my - cy) * 0.35 + Math.floor(i / 3) * 22 - 20];
+  });
+  const color = { synonym: "#16a34a", conflict: "#dc2626" };
+  let edges = "";
+  for (const s of shared) for (const n of s.used_by) {
+    const [x1, y1] = pos[n], [x2, y2] = pos["src:" + s.id];
+    const dim = f && !s.used_by.includes(f) ? .15 : 1;
+    edges += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#cbd5e1" stroke-width="1.5" opacity="${dim}"/>`;
+  }
+  const seen = new Set();
+  for (const l of DATA.links) {
+    const key = [l.from, l.to, l.kind].join("|");
+    if (seen.has(key) || !pos[l.from] || !pos[l.to]) continue;
+    seen.add(key);
+    const [x1, y1] = pos[l.from], [x2, y2] = pos[l.to];
+    const c = color[l.kind] || (l.ok === null ? "#a855f7" : l.ok ? "#0ea5e9" : "#d97706");
+    const dim = f && ![l.from, l.to].includes(f) ? .12 : .9;
+    const bend = l.kind === "synonym" ? 30 : l.kind === "conflict" ? -30 : 0;
+    const mx = (x1 + x2) / 2 + bend, my = (y1 + y2) / 2 - bend;
+    edges += `<path d="M${x1},${y1} Q${mx},${my} ${x2},${y2}" fill="none" stroke="${c}" stroke-width="2.5" opacity="${dim}"/>`;
+  }
+  let nodes = "";
+  for (const s of shared) {
+    const [x, y] = pos["src:" + s.id];
+    nodes += `<g opacity="${f && !s.used_by.includes(f) ? .2 : 1}"><title>${esc(s.tables.join("\n"))}</title>
+      <rect x="${x - 8}" y="${y - 8}" width="16" height="16" rx="4" fill="#94a3b8"/>
+      <text x="${x + 13}" y="${y + 5}" font-size="12" fill="#475569">${esc(s.label)}（${s.tables.length} 張表）</text></g>`;
+  }
+  for (const it of items) {
+    const [x, y] = pos[it.name], wb = it.kind === "workbook";
+    const dim = f && f !== it.name ? .35 : 1;
+    nodes += `<g opacity="${dim}" style="cursor:pointer" onclick="document.querySelector('#focus').value='${it.name}'; render()">
+      <circle cx="${x}" cy="${y}" r="26" fill="${wb ? "#ecfdf5" : "#eef2ff"}" stroke="${wb ? "#10b981" : "#6366f1"}" stroke-width="2.5"/>
+      <text x="${x}" y="${y + 5}" text-anchor="middle" font-size="13" font-weight="700" fill="${wb ? "#047857" : "#3730a3"}">${wb ? "XLS" : "BI"}</text>
+      <text x="${x}" y="${y + 44}" text-anchor="middle" font-size="13" fill="#0f172a">${esc(it.title.length > 18 ? it.title.slice(0, 17) + "…" : it.title)}</text></g>`;
+  }
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = edges + nodes;
+}
+window.onresize = () => DATA && drawGraph();
+load();
+</script>
+</body>
+</html>

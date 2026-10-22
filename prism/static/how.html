@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>運作原理 · PRISM</title>
+<link rel="stylesheet" href="/static/prism.css">
+<script src="/static/prism.js"></script>
+</head>
+<body>
+<script>header("how")</script>
+<div class="wrap">
+  <h1 style="font-size:28px; margin:0 0 6px">為什麼 PRISM 不會亂講</h1>
+  <p class="muted" style="font-size:16px">一般的 AI 助理看截圖、自己算數字，所以會「看起來很對但其實錯」。PRISM 把工作分開：
+    <b>程式負責算、模型只負責說、查核器負責擋</b>。</p>
+
+  <h2>從上傳到回答</h2>
+  <div class="flow">
+    <div class="card"><div class="n">1 · 讀報表</div><b>不需要 Power BI</b><div class="sub">直接解開 .pbix：資料表、DAX 量值、關聯、Power Query、
+      報表每一頁每張圖用了什麼、作者設的顏色規則與目標線。</div></div>
+    <div class="card"><div class="n">2 · 照模型計算</div><b>不是讓 AI 算</b><div class="sub">DAX 量值翻成 SQL，照報表的關聯計算每天、每個範圍的數字；
+      變化是否顯著用統計判斷。</div></div>
+    <div class="card"><div class="n">3 · 模型只組句</div><b>本機的小模型</b><div class="sub">它只能呼叫唯讀工具、照抄工具給的數字與文字；
+      資料與問題都不離開這台電腦。</div></div>
+    <div class="card"><div class="n">4 · 逐項查核</div><b>不通過就不給你看</b><div class="sub">日期、範圍、數字、名稱、對應、方向、顯著性、
+      沒有證據的原因、重點：9 項機械式比對，不合格就退回重寫，仍不合格改顯示分析工具自己的判讀。</div></div>
+  </div>
+
+  <h2>驗證過的數字</h2>
+  <div class="card" style="padding:6px 8px">
+    <table class="facts">
+      <tr><th>驗證</th><th>結果</th></tr>
+      <tr><td>分析引擎的數字 vs Power BI 自己用 DAX 算的</td><td>10,316 個數字，0 個不一致</td></tr>
+      <tr><td>不開 Power BI 直接讀 .pbix 的快照 vs 透過 Power BI Desktop 取的</td><td>52,885,918 個值，0 個不一致</td></tr>
+      <tr><td>「畫面上哪些門市是紅的」的數值 vs 直接對資料庫下 SQL</td><td>75 個值，0 個不一致（含「與上週同日比」這類時間比較）</td></tr>
+      <tr><td>問答題庫（含陷阱題）</td><td>使用者拿到正確答案：零售 18/20、Excel 報表 14/15；<b>查核通過卻答錯：0</b></td></tr>
+      <tr><td>突變測試：刻意竄改正確的回答</td><td>查核攔下 94–99%</td></tr>
+      <tr><td>Microsoft 官方 10 個範例報表的格式設定</td><td>條件式格式、色階數量全部與檔案一致</td></tr>
+    </table>
+  </div>
+
+  <h2>畫面上的圖：不看截圖</h2>
+  <div class="split">
+    <div class="card" style="padding:16px"><b>截圖的做法</b><div class="sub">圖片裡只有像素：看不出那根長條是哪個量值、在什麼篩選下算的、
+      紅色是哪條規則；互動式報表又截不完整。所以只能猜。</div></div>
+    <div class="card" style="padding:16px"><b>PRISM 的做法</b><div class="sub">從報表檔案讀出每張圖的欄位與作者規則，依報表正在顯示的日期範圍算出數值，
+      再說哪些成員落在紅色。使用者描述得不夠清楚（「紅色的是什麼？」有兩張圖），就列出候選請他選，不猜。</div></div>
+  </div>
+
+  <h2>多份報表、報表與 Excel</h2>
+  <div class="card" style="padding:16px">
+    <div class="sub">每張表追到它實際讀的資料庫或 Excel；每個量值展開成來源欄位上的公式再比較，所以「財務部的營收」=「我們的銷售額」、
+      「兩份都叫銷售額但一份含折扣」都找得出來。Excel 的代碼和報表的代碼用實際資料逐一比對，列出漏了、多了、只差大小寫或空白的值；
+      上傳的 Excel 是報表資料來源的副本時，逐欄確認內容是否一致。</div>
+  </div>
+
+  <h2>限制</h2>
+  <div class="card" style="padding:6px 8px">
+    <table class="facts">
+      <tr><td>原因</td><td>能說明變化<b>發生在哪裡</b>（哪個區域、品類、門市），業務上的原因要資料裡有才說得出來。</td></tr>
+      <tr><td>DAX</td><td>常見的寫法都支援（加總、不重複計數、DIVIDE、CALCULATE 欄位篩選、DATEADD 等時間比較）；
+        不支援的（IF 的一般用法、FILTER 表格…）會列出來，不會亂算。</td></tr>
+      <tr><td>檔案</td><td>被敏感度標籤加密的 .pbix、DirectQuery 報表（檔案裡沒有資料）需要 Power BI Desktop。</td></tr>
+      <tr><td>權限</td><td>目前沒有登入機制：放在公司內網使用；拿到轉寄連結的人看得到那段對話。</td></tr>
+    </table>
+  </div>
+</div>
+<footer>PRISM · Proven Report Insights &amp; Semantic Mapping</footer>
+</body>
+</html>

@@ -9,6 +9,7 @@ so snapshots are taken with one code path whatever the source.
 import decimal
 import re
 from datetime import date, timedelta
+from functools import lru_cache
 from pathlib import Path
 
 import duckdb
@@ -50,8 +51,7 @@ def read_file_table(t, ctx: Context) -> pd.DataFrame:
     if src["kind"] == "csv":
         df = pd.read_csv(path, sep=src["delimiter"], encoding=src["encoding"], header=header)
     elif src["item_kind"] == "Table":  # an Excel table object: its own range, header row included
-        import openpyxl
-        book = openpyxl.load_workbook(path, data_only=True, read_only=False)
+        book = _workbook(str(path), path.stat().st_mtime)
         ws, ref = next(((ws, ws.tables[t.source_table].ref) for ws in book.worksheets
                         if t.source_table in ws.tables), (None, None))
         if ws is None:
@@ -67,6 +67,13 @@ def read_file_table(t, ctx: Context) -> pd.DataFrame:
         df.columns = [f"Column{i + 1}" for i in range(df.shape[1])]
     df = df.rename(columns={a.replace('""', '"'): b.replace('""', '"') for a, b in src.get("renames", [])})
     return apply_types(df, t.m)
+
+
+@lru_cache(maxsize=4)
+def _workbook(path: str, mtime: float):
+    """A workbook opened once for all its table objects (opening a large one takes seconds)."""
+    import openpyxl
+    return openpyxl.load_workbook(path, data_only=True, read_only=False)
 
 
 def apply_types(df: pd.DataFrame, m: str) -> pd.DataFrame:

@@ -12,3 +12,5 @@ installers/
 # intermediate file from Power BI Desktop for Report Server (RetailSales.pbix is the published test file)
 powerbi/RetailSales_RS.pbix
 powerbi/*.tmp
+# reports and workbooks uploaded in PRISM (each person's own data)
+workspace/

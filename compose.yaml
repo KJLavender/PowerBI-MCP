@@ -1,0 +1,36 @@
+# PRISM with its local model:  docker compose up -d   then open http://localhost:8080
+# Uploaded reports, snapshots, conversations and the model stay in the volumes below; nothing leaves the machine.
+name: prism
+
+services:
+  prism:
+    build: .
+    restart: unless-stopped
+    depends_on: [ollama]
+    ports:
+      - "8080:8080"             # the portal
+      - "8101-8120:8101-8120"   # one chat per opened report (same numbers inside and outside)
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      # AGENT_MODEL: qwen3.5:4b   # another Ollama model for the chats
+    volumes:
+      - workspace:/app/workspace
+      - data:/app/data
+      - logs:/app/logs
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - models:/root/.ollama
+    # with an NVIDIA GPU (and the NVIDIA Container Toolkit) the chats answer much faster:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+
+volumes:
+  workspace:
+  data:
+  logs:
+  models:

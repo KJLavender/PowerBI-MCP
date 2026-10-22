@@ -98,6 +98,9 @@
   .conv .del { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 2px 6px; border-radius: 4px; }
   .conv .del:hover { color: #b91c1c; background: #fee2e2; }
   .empty { padding: 16px; color: var(--muted); font-size: 13px; }
+  .visuals { margin-top: 18px; text-align: left; }
+  .visuals .page { font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+  .visuals button { margin: 0 6px 6px 0; }
   .shared-banner { margin: 8px 0 4px; padding: 10px 12px; border-radius: 8px; background: #eef4ff; color: #1e3a8a; font-size: 13px; line-height: 1.6; }
   .shared-banner.stale { background: #fff7e6; color: #8a5300; }
   .share-box { position: fixed; inset: 0; background: rgba(0,0,0,.25); display: none; align-items: center; justify-content: center; z-index: 20; }
@@ -111,6 +114,7 @@
 </head>
 <body>
 <header>
+  <a id="portalLink" href="#" hidden style="margin-right:6px">← PRISM</a>
   <h1>報表問答助理</h1>
   <span class="meta" id="meta">連線中…</span>
   <span class="spacer"></span>
@@ -173,6 +177,7 @@ if (new URLSearchParams(location.search).has("embed")) {
 const $ = (id) => document.getElementById(id);
 let busy = false;
 let examples = [];
+let visualPages = [];
 const welcomeHTML = $("thread").innerHTML;
 // the current conversation survives reloads; older ones are listed under 紀錄
 function newSession() { const id = crypto.randomUUID(); localStorage.setItem("chatSession", id); return id; }
@@ -188,6 +193,23 @@ function showWelcome() {
     b.type = "button"; b.textContent = q;
     b.onclick = () => ask(q);
     $("examples").appendChild(b);
+  }
+  // without the report next to the chat: its pages and visuals, so people can ask about one
+  if (visualPages.length) {
+    const box = document.createElement("div");
+    box.className = "visuals";
+    box.innerHTML = "<div><b>這份報表的圖</b>（點一下，請助理解釋它）</div>";
+    for (const p of visualPages) {
+      const h = document.createElement("div"); h.className = "page"; h.textContent = p.page; box.appendChild(h);
+      for (const v of p.visuals) {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = v.title + (v.author ? " ★" : "");
+        b.title = v.author ? "作者在這張圖設了顏色規則或目標線" : v.kind;
+        b.onclick = () => ask(`解釋「${p.page}」頁的「${v.title}」這張圖`);
+        box.appendChild(b);
+      }
+    }
+    $("welcome").appendChild(box);
   }
 }
 
@@ -446,6 +468,12 @@ $("closeDrawer").addEventListener("click", () => $("drawer").classList.remove("o
 fetch("/api/info").then((r) => r.json()).then(async (info) => {
   $("meta").textContent = `資料最新到 ${info.latest} · 模型 ${info.model} · 本機執行`;
   examples = info.examples;
+  if (info.portal) {
+    $("portalLink").hidden = false; $("portalLink").href = info.portal;
+    document.title = `PRISM · ${info.report}`;
+    if (!new URLSearchParams(location.search).has("embed")) $("portalLink").target = "_top";
+  }
+  if (!info.report_url) visualPages = await (await fetch("/api/visuals")).json().catch(() => []);
   await loadConversation(session);
 }).catch(() => { $("meta").textContent = "無法連線到後端"; });
 </script>

@@ -2,182 +2,155 @@
 
 **English** | [繁體中文](README.zh-TW.md)
 
-**Upload a Power BI report (.pbix) and the Excel files that go with it, then ask about it** — *"why did sales
-drop?"*, *"what does the red mean?"*, *"is finance's revenue the same as ours?"* PRISM reads the report file
-itself (no Power BI needed), computes the numbers from the report's own measures and relationships, and checks
-every answer against those results before showing it. Everything runs on your machine: the files, the analysis
-and the language model never leave it.
+PRISM lets you ask questions about a Power BI report in plain language, such as "why did sales drop in the North region?" or "what does the red bar mean?". You upload the report file (`.pbix`) and any related Excel files. PRISM reads the file itself, so you do not need Power BI. It calculates the numbers with ordinary code, not with the language model, and checks every answer against those numbers before it shows you the answer. Everything runs on your own machine.
 
-- **Answers with evidence**: numbers come from the model's DAX measures translated to SQL, not from the language
-  model; an answer that fails the 9 mechanical checks is never shown.
-- **Understands what is on screen**: the author's colour rules, target lines and highlighted members are read
-  from the report file, so "the red bars" can be explained without screenshots.
-- **Maps reports and Excel together**: same-name measures that are computed differently, renamed measures that
-  mean the same, Excel codes that do not match the report's — on one page.
-- **Forward a conversation**: the next person opens the same report view and continues the same chat.
+## What it does
 
-## Get started
+- Answers "why" questions. The numbers come from the report's own measures (named formulas written in DAX, Power BI's formula language), translated to SQL and run on a local copy of the data. The language model only writes the sentences.
+- Checks each answer with 9 mechanical checks: date, scope, numbers, names, number-to-name match, direction, significance, causes with no evidence, and the key finding. If an answer fails, it goes back to the model to be rewritten. If it still fails, PRISM shows the analysis tool's own reading instead.
+- Explains what is on screen. The author's colour rules, target lines and highlighted members are read from the report file, so you can ask about "the red text" or "the dashed line on margin" without a screenshot.
+- Compares reports and Excel files on one page, the report map. It finds measures that share a name but are calculated differently, measures with different names that mean the same thing, and Excel codes that do not match the database.
+- Lets you forward a conversation. The next person opens the same report view and continues the same chat.
 
-You need [Ollama](https://ollama.com/download) for the chats (PRISM downloads its model, `qwen3.5:4b`, on first
-start). Uploading and the report map work without it.
+## How it works
 
-**Windows** — install [Python 3.11+](https://www.python.org/downloads/), download this repository and
-double-click **`PRISM.cmd`**. The first run creates the Python environment (a few minutes), then the browser opens
-<http://localhost:8080>. `PRISM.cmd -Share` lets colleagues on the network open it too.
+1. PRISM unpacks the `.pbix` with [PBIXRay](https://github.com/Hugoberry/pbixray). It reads tables, measures, relationships, Power Query steps, the imported data, and what each chart on each page uses.
+2. It guesses analysis settings from the data (fact table, date column, dimensions) and builds daily snapshots in DuckDB, a small local database.
+3. A small local language model (Ollama, default `qwen3.5:4b`) answers by calling read-only tools through an MCP server. MCP is a standard way to give tools to a model. The tools return numbers that are already formatted, and the model has to copy them.
+4. The checker compares the model's answer with the tool results.
 
-**Docker** (Linux, or Windows with Docker) — PRISM and the model in one command:
+## Run it
+
+You need [Ollama](https://ollama.com/download) for the chat. PRISM downloads its model on first start. Uploading a report and the report map work without Ollama.
+
+On Windows, install [Python 3.11 or newer](https://www.python.org/downloads/), then double-click `PRISM.cmd`. The first run creates a `.venv` and installs the packages, which takes a few minutes. Then the browser opens <http://localhost:8080>. The launcher script is `scripts/start-prism.ps1`, and `PRISM.cmd` passes its options on:
+
+- `-Share` listens on all addresses so colleagues on the network can open it. Allow ports 8080 and 8101-8120 in the Windows firewall.
+- `-Port 8080` changes the portal port. `-NoBrowser` does not open the browser.
+
+With Docker (Linux, or Windows with Docker), this starts PRISM and an Ollama container:
 
 ```bash
 docker compose up -d        # then open http://localhost:8080
 ```
 
-Then drag a `.pbix` onto the page, add the related Excel files if any, and press **上傳並分析** (upload and
-analyse): about a minute later the report can be asked about and appears on the report map. Details, the API and
-what each step does: [docs/prism.md](docs/prism.md).
+With an NVIDIA GPU, uncomment the `deploy` block in `compose.yaml` to make the chat faster.
 
-| Page | |
+Then drag a `.pbix` onto the page, add Excel files if you have them, and press the upload button (the label on the page is "上傳並分析"). PRISM imports the file, builds the settings and snapshots, writes a first report and updates the map. The AdventureWorks sample with its workbook took 77 seconds. When it finishes, open the chat for that report.
+
+Environment variables: `AGENT_MODEL` (Ollama model for the chat, default `qwen3.5:4b`), `OLLAMA_HOST` (default `http://127.0.0.1:11434`; the Docker setup points it at the `ollama` container), `PRISM_EXAMPLES` (`1` or `0` to show or hide the example reports).
+
+The pages:
+
+| Page | What it is for |
 |---|---|
-| My reports | upload, processing steps, open a report's chat, attach more Excel, delete |
-| Report map | every report and workbook, the sources they share, synonyms, conflicts, code checks, the author's rules |
-| How it works | why answers can be trusted, the verified numbers, the limits |
+| My reports | Upload, processing steps, open a report's chat, attach more Excel, delete |
+| Report map | Every report and workbook, shared sources, synonyms, conflicts, code checks, the author's rules |
+| How it works | Why the answers can be trusted, the checked numbers, the limits |
 
-## How it was built
+Details, the HTTP API and sharing on a network are in [docs/prism.md](docs/prism.md). The docs are written in Traditional Chinese.
 
-PRISM grew out of a fully local lab for an agent that **understands Power BI reports**: every morning it explains
-which metrics changed and where the change came from, and it answers *"why did this KPI drop?"* using the
-semantic model's real measures and relationships. The lab runs on a simulated retail report on Oracle (with a
-Report Server and a daily refresh, the typical on-prem setup) and a report built on a public Excel workbook
-(Global Superstore), with known business events injected as ground truth. The rest of this page describes it.
+## What has been checked
 
-## What it does
+These numbers come from the test reports in this repo (`reports/` and `datasets/*/reports/`).
 
-| Phase | Result |
+| Check | Result |
 |---|---|
-| 1. Simulated enterprise source | Oracle Database (Docker in WSL) refreshed daily by an ETL simulator; Power BI project generated as code (TMDL + PBIR) |
-| 2. Daily change analysis | Reads measures/relationships from the Power BI project, snapshots to DuckDB, detects significant changes and picks the scope that explains them. **6/6 injected scenarios detected** (4 on day 0) |
-| 3. "Why" Q&A | Chat panel next to the Report Server report, linked to it through a shared filter bar (filters drive both the report and the questions; answers can apply their scope to the report), with follow-up questions, live progress, an evidence view and locally stored chat history — on a read-only MCP server + local Ollama model. Every answer is checked against the tool results (see row 6); users got a correct answer on **10–11/11** retail and **14–15/15** Excel questions, including trap questions |
-| 4. Report Server | Power BI Report Server with a daily 06:30 scheduled refresh from Oracle — the typical on-prem setup |
-| 5. Excel report | The same engine and agent on a Power BI report built from the public Global Superstore Excel workbook (18 orders a day): data read through the model's Power Query, thresholds calibrated on the untouched workbook (0.2 background findings a day), **4 of 5 detectable injected events found** |
-| 6. Verification | Every answer goes through 9 mechanical checks (date, scope, numbers, names, number-to-thing binding, direction, significance, unprovable causes, key finding). A failing answer is sent back; if it still fails, the analysis tool's own reading is shown instead. **0 wrong answers got past the checks**; a mutation test breaks correct answers on purpose and the checks catch **94–99%**; the engine's numbers match Power BI's own DAX results (**10,316 numbers, 0 differences**) |
-| 7. Any .pbix | `python -m analysis import-pbix FILE.pbix --name X` **reads the file itself — no Power BI, no Windows needed**: pages and the author's formatting from the .pbix JSON, the data model (DAX, Power Query, relationships) and the imported data decoded with [PBIXRay](https://github.com/Hugoberry/pbixray), and a draft of the analysis settings inferred from the data; when the file cannot be read it falls back to Power BI Desktop's engine (`--desktop`). Both paths give the same result on the retail .pbix: model, draft and snapshots (**52,885,918 values, 0 differences**); the Desktop path's snapshots also match reading Oracle directly (**544,515 values, 0 differences**), all injected events found, **10/11** questions answered correctly, 0 wrong answers passed the checks |
-| 8. Several reports, the author's intent | `python -m analysis catalog` puts every report in one graph: each table traced to the physical source it reads (whatever it is called in the report), each measure expanded into aggregates of source columns and compared as a formula (names are ignored), Excel codes checked against the database value by value. `python -m analysis intent` reads the thresholds, target lines and highlighted members the author set. On a second retail report (finance team, with an Excel target workbook) every planted synonym, same-name-different-meaning measure and code mismatch was **found**; the formatting parser was checked on Microsoft's 10 official sample .pbix files with matching counts; cross-report questions **4/4** |
-| 9. Questions about what is on screen | The user describes what they see ("the red text", "the North bar", "the dashed line on margin"): the visual is identified from the report file (several matches are listed for the user to pick, never guessed), its measures and the author's rules are explained, and its numbers over the date range the report shows are computed from the snapshots, with each member's colour band (time comparisons such as DATEADD included). No screenshots. Checked against SQL on Oracle: **75 values, 0 differences**; the 5 new questions pass, retail set **18/20** correct, **0 wrong answers passed the checks** |
-| 10. PRISM | The packaging: a web portal to upload a .pbix and its Excel files (each upload runs import → settings → snapshots → first report → map), one chat per report, the report map; Windows launcher and Docker. A clean download, run through `PRISM.cmd` and through Docker, imported the AdventureWorks sample with its workbook in **77 s**, matched all **46** workbook columns to the report and answered with grounded results |
+| Engine numbers vs Power BI's own DAX results (retail report 4,176, Superstore report 6,140) | 10,316 numbers, 0 differences |
+| Snapshots read from the `.pbix` file vs snapshots from Power BI Desktop | 52,885,918 values, 0 differences |
+| Snapshots through Power BI Desktop vs reading Oracle directly | 544,515 values, 0 differences |
+| Values of on-screen charts vs SQL on Oracle | 75 values, 0 differences |
+| Questions about the retail report (20 questions) | 18 correct answers shown to the user |
+| Questions about the Superstore report (15 questions) | 14 correct answers shown to the user |
+| Wrong answers that passed the checks | 0 in all of the above |
+| Mutation test (correct answers changed on purpose; the checks must catch them) | 98/99, 103/106 and 90/94 caught (96% to 99%) |
+| Injected business events found, retail report | 6 of 6 |
+| Injected business events found, Superstore report | 4 of 5 detectable ones |
+| Format parser on Microsoft's 10 sample `.pbix` files | counts match the files |
 
-Example (from `python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`):
+## Development lab
 
-> **Conclusion**: North region sales fell mainly because of 3C accessories (84% of the total change); "North × 3C accessories" is significantly abnormal.
-> **Evidence**: North sales -19.1% (381,154 vs 471,022), below the significance threshold (z -3.0); one level deeper, North × 3C accessories -46.7%, z -4.7, significant …
-> **Limits**: the data cannot tell the business reason (competitors, stock-outs…); needs business confirmation.
+PRISM grew out of a local lab that simulates a company's setup, with known business events planted in the data so answers can be scored. The retail report runs on an Oracle database that an ETL simulator refreshes every day, and it is published on Power BI Report Server with a 06:30 scheduled refresh. A second report is built from the public Global Superstore Excel workbook. A third, "store targets", mixes the retail Oracle data with an Excel target workbook that contains deliberate inconsistencies, and is used to test the cross-report map.
 
-## Architecture
+Example answer from `python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？"`:
 
-```
-06:00  ETL simulator ──▶ Oracle (SALES_DW) ──▶ DuckDB daily snapshot ──▶ engine ──▶ reports/<date>.md
-06:30                    Oracle ──▶ Power BI Report Server scheduled refresh ──▶ report portal
+> Conclusion: North region sales fell mainly because of 3C accessories (84% of the total change); "North x 3C accessories" is significantly abnormal.
+> Evidence: North sales -19.1% (381,154 vs 471,022), below the significance threshold (z -3.0); one level deeper, North x 3C accessories -46.7%, z -4.7, significant ...
+> Limits: the data cannot tell the business reason (competitors, stock-outs ...); needs business confirmation.
 
-user question ──▶ agent (local) ──▶ Ollama model
-                      │  ▲  tool results (pre-formatted numbers)
-                      ▼  │
-               MCP server (read-only, stdio) ──▶ Power BI model (TMDL/PBIR) + snapshots + engine
-
-scenarios/scenarios.yaml — injected business events (ground truth); only the evaluators read it
-```
-
-## Requirements (the lab)
-
-- Windows 11 with WSL2 (Ubuntu) and Docker Engine inside WSL
-- Python 3.11+, Power BI Desktop
-- [Ollama](https://ollama.com) with a tool-calling model (default `qwen3.5:4b`) for Phase 3
-- Power BI Report Server (Developer edition) + Power BI Desktop for Report Server + Oracle ODAC for Phase 4
-
-## Quick start (the lab)
+The lab needs Windows 11 with WSL2 (Ubuntu) and Docker Engine inside WSL, Python 3.11+, Power BI Desktop and Ollama. The Report Server steps also need Power BI Report Server (Developer edition), Power BI Desktop for Report Server and Oracle ODAC.
 
 ```powershell
-# Phase 1 — Oracle + simulated data + Power BI project
+# Oracle, simulated data and the Power BI project
 copy .env.example .env                                  # then set the passwords
 .\scripts\start-oracle.ps1
 python -m venv .venv; .\.venv\Scripts\pip install -r requirements.txt
 .\.venv\Scripts\python -m simulator init
-.\.venv\Scripts\python -m simulator backfill            # 2025-01-01 .. yesterday, ~2.7M rows
-.\.venv\Scripts\python powerbi\build_pbip.py            # open powerbi\RetailSales.pbip, Refresh
+.\.venv\Scripts\python -m simulator backfill            # 2025-01-01 to yesterday, about 2.7M rows
+.\.venv\Scripts\python powerbi\build_pbip.py            # open powerbi\RetailSales.pbip, then Refresh
 .\scripts\register-daily-task.ps1                       # daily 06:00: ETL + analysis
 
-# Phase 2 — daily change report
+# Daily change report
 .\.venv\Scripts\python -m analysis snapshot
-.\.venv\Scripts\python -m analysis report               # reports/<date>.md
-.\.venv\Scripts\python -m analysis evaluate             # score against the scenarios
+.\.venv\Scripts\python -m analysis report               # writes reports/<date>.md
+.\.venv\Scripts\python -m analysis evaluate             # score against the planted events
 
-# Phase 3 — ask why, with a local model
-.\scripts\start-chat.ps1                                # report + chat panel on http://localhost:8090 (or double-click 報表問答助理.cmd)
+# Ask why, with a local model
+.\scripts\start-chat.ps1                                # report + chat panel at http://localhost:8090
 .\.venv\Scripts\python -m agent ask "為什麼 2026-09-17 北區的銷售額下降？" -v
 .\.venv\Scripts\python -m agent chat
 .\.venv\Scripts\python -m agent evaluate
 
-# Phase 4 — Report Server (one-time admin setup, then publish)
-.\scripts\phase4-setup-admin.ps1                        # as administrator
+# Report Server (one-time admin setup, then publish)
+.\scripts\phase4-setup-admin.ps1                        # run as administrator
 .\scripts\phase4-publish.ps1                            # upload, credentials, 06:30 schedule, refresh
 
 # Verification
-.\.venv\Scripts\python -m agent mutation-test         # break passing answers on purpose: are they caught?
-.\.venv\Scripts\python -m analysis reconcile          # compare with Power BI Desktop's own DAX results (open the report first)
+.\.venv\Scripts\python -m agent mutation-test           # change correct answers on purpose: are they caught?
+.\.venv\Scripts\python -m analysis reconcile            # compare with Power BI Desktop's DAX results (open the report first)
 
 # Several reports and the author's intent
-.\.venv\Scripts\python datasets\store_targets\prepare.py   # the finance report's Excel store targets (built from Oracle)
-.\.venv\Scripts\python datasets\store_targetsuild_pbip.py
-.\.venv\Scripts\python -m analysis catalog                  # → reports/catalog.md
-.\.venv\Scripts\python -m analysis intent store_targets     # thresholds, target lines, highlights the author set
+.\.venv\Scripts\python datasets\store_targets\prepare.py
+.\.venv\Scripts\python datasets\store_targets\build_pbip.py
+.\.venv\Scripts\python -m analysis catalog              # writes reports/catalog.md
+.\.venv\Scripts\python -m analysis intent store_targets # thresholds, target lines, highlights the author set
 
-# Excel report (Global Superstore) — every command above works on it with PBI_DATASET
+# Import any .pbix without Power BI (add --desktop to read it through Power BI Desktop instead)
+.\.venv\Scripts\python -m analysis import-pbix FILE.pbix --name X
+
+# Excel report (Global Superstore): the commands above work on it once PBI_DATASET is set
 $env:PBI_DATASET = "superstore"
-.\.venv\Scripts\python datasets\superstore\prepare.py   # download (SHA-256 checked) + write the copy with injected events
+.\.venv\Scripts\python datasets\superstore\prepare.py   # downloads the workbook (SHA-256 checked) and writes the copy with planted events
 .\.venv\Scripts\python datasets\superstore\build_pbip.py
 .\.venv\Scripts\python -m analysis snapshot
 .\.venv\Scripts\python -m analysis evaluate
 .\.venv\Scripts\python -m agent evaluate
 ```
 
-## Test data
+`agent/mcp-config.example.json` shows how to start the read-only MCP server (`python -m analysis.mcp_server`) from another MCP client.
 
-- `powerbi/RetailSales.pbix` — the report with data imported (2.7M order lines), in the legacy report format so it
-  uploads to Power BI Report Server. Data source credentials are not included.
-- `powerbi/RetailSales.pbip` — the same report as a Power BI project (TMDL + PBIR), generated by `powerbi/build_pbip.py`.
-- `reports/` — sample daily reports, the evaluation results of Phases 2 and 3, the mutation test and the reconciliation with Power BI.
-- `datasets/superstore/` — the Excel-based report (Power BI project, analysis settings, injected events, questions) and its results in `reports/`. The workbook itself is downloaded by `prepare.py`.
-- `datasets/store_targets/` — the finance team's store-target report: the same Oracle as the retail report plus an Excel target workbook (generated by `prepare.py`, with deliberate inconsistencies); `reports/catalog.md` is the catalog of all reports.
+Test data in the repo: `powerbi/RetailSales.pbix` (the retail report with 2.7M order lines imported, in the older format that Report Server accepts, without data source credentials), `powerbi/RetailSales.pbip` (the same report as a Power BI project, generated by `powerbi/build_pbip.py`), and the evaluation results under `reports/` and `datasets/*/reports/`.
 
-## Repository layout
+## Folders
 
 | Path | Content |
 |---|---|
-| `simulator/` | Oracle schema, master data, daily data generator with scenario injection |
-| `powerbi/` | Power BI project generator, legacy `.pbix` converter for Report Server, the report files |
-| `analysis/` | Semantic layer (TMDL/PBIR/DAX parsing), snapshots, change engine, reports, MCP server |
-| `prism/` | The PRISM portal: uploads, processing jobs, chat servers per report, the report map |
-| `agent/` | Local Ollama agent, grounding checks, Q&A test set, the chat page |
-| `scripts/` | Container start-up, scheduled tasks, Report Server setup and publishing |
-| `docker/` | Oracle Database Free + SQL Server Developer (Report Server catalog) |
-| `datasets/` | Other reports analysed by the same engine (Global Superstore on Excel), the finance report used for cross-report tests |
-| `docs/` | Design notes per phase (Traditional Chinese) |
+| `prism/` | The web portal: uploads, processing jobs, one chat server per report, the report map |
+| `analysis/` | Reads the model (TMDL, PBIR, DAX), snapshots, change detection, reports, MCP server |
+| `agent/` | Local Ollama agent, answer checks, question sets, the chat page |
+| `simulator/` | Oracle schema, master data, daily data generator with event injection |
+| `powerbi/` | Project generator, converter to the older `.pbix` format for Report Server, the report files |
+| `datasets/` | The Superstore report, the store-targets report, and the imported-`.pbix` test set |
+| `scripts/` | PowerShell scripts for start-up, scheduled tasks, Report Server |
+| `docker/` | Oracle Database Free and SQL Server Developer (the Report Server catalog) |
+| `docs/` | Design notes, one per topic (Traditional Chinese) |
 
-## Documentation
+## Limits
 
-Detailed design notes are written in Traditional Chinese:
-
-- [docs/prism.md](docs/prism.md) — PRISM: installing, uploading, the pages, the API, sharing on a network
-- [docs/powerbi-setup.md](docs/powerbi-setup.md) — Power BI project, model and report pages
-- [docs/analysis.md](docs/analysis.md) — how the engine reads the model, detects changes and picks the explaining scope
-- [docs/agent.md](docs/agent.md) — MCP tools, grounding checks, Q&A evaluation
-- [docs/report-server.md](docs/report-server.md) — Report Server setup and the PBIR-format pitfall
-- [docs/pbix-import.md](docs/pbix-import.md) — importing a report straight from a .pbix
-- [docs/excel-dataset.md](docs/excel-dataset.md) — the Excel-based report: calibration on small data, detection results, reconciliation
-- [docs/visuals.md](docs/visuals.md) — questions about what is on screen: identifying the visual, explaining it, its numbers and colour bands over the report's date range
-- [docs/catalog.md](docs/catalog.md) — how several reports relate (lineage, measures with the same or a clashing meaning, code checks) and what the report author emphasises
-
-## Limitations
-
-- The analysis tells **where** a change happened, not the business reason behind it, unless that reason is in the data.
-- Thresholds must be calibrated per report: on the Excel data the original settings raised 7.3 false findings a day until they were recalibrated on the untouched workbook. Small data can only show large events.
-- The checks prove an answer is consistent with the analysis results; they cannot prove the analysis picked the best explanation. The evidence is always shown with the answer.
-- Measure equivalence covers the common DAX patterns; `IF`, `SWITCH` and the like are reported as not expandable and never treated as equal. Reports mixing Oracle and Excel are used for the catalog and Q&A only, without daily change analysis.
-- If you connect the MCP server to an MCP client backed by a cloud model, tool results leave the machine — use simulated data only.
+- The analysis shows where a change happened. It cannot give the business reason unless the reason is in the data.
+- Thresholds have to be tuned for each report. On the Excel data, the original settings reported 7.3 false findings a day until they were recalibrated on the untouched workbook. Small data only shows large events.
+- The checks prove that an answer agrees with the analysis results. They cannot prove that the analysis picked the best explanation, so the evidence is always shown with the answer.
+- Measure comparison covers common DAX patterns. `IF`, `SWITCH` and similar are reported as not expandable and are never treated as equal. Reports that mix Oracle and Excel are used for the map and for questions only, without daily change analysis.
+- PRISM has no login or permissions. Use it on an internal network. Anyone with a forwarded link can see that conversation.
+- Encrypted `.pbix` files (sensitivity labels) and DirectQuery reports (no data in the file) cannot be read directly. Use `import-pbix --desktop` with Power BI Desktop.
+- If you connect the MCP server to a client that uses a cloud model, tool results leave your machine. Use simulated data only in that case.
